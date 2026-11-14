@@ -188,6 +188,8 @@ pub struct Panels {
     pub gestures: bool,
     pub appearance: bool,
     pub avatar_studio: bool,
+    /// Build › Pingmator link is listening (never saved: off at launch).
+    pub pingmator_link: bool,
     pub ao: bool,
     pub people_tab: u8,
     /// The torn-off Contacts window (ContactsTornOff).
@@ -274,6 +276,7 @@ impl Panels {
             gestures: false,
             appearance: settings.show_appearance,
             avatar_studio: false,
+            pingmator_link: false,
             ao: settings.show_ao,
             people_tab: settings.people_tab.min(1),
             contacts: false,

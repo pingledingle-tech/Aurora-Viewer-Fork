@@ -1169,6 +1169,11 @@ a server-wide parcel inventory. Reference: `FSAreaSearch::findObjects`,
 `isSearchableObject`, `matchObject`, `processRequestQueue`, `requestObjectProperties`
 (`indra/newview/fsareasearch.cpp`).
 
+`pingmator_link/` is the opt-in loopback link with the Pingmator animation editor: one client on
+127.0.0.1:17656, newline-delimited JSON, poses sent as small BVH and decoded on its own thread.
+`app/pingmator_link.rs` (Build › Pingmator link) lays the latest pose on the agent's local poser
+session through `ik_edit::Editor::apply_link_pose`; nothing reaches the simulator.
+
 `blender_live/` implements LiveMesh: the opt-in loopback Blender transport, bounded v1 rest-mesh
 snapshots and UI. Both matching Blender package layouts are bundled by
 `blender_live/addon.rs` and exported to ZIP on a worker, using the shared atomic

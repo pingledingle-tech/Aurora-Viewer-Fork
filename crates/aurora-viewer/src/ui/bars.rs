@@ -67,6 +67,8 @@ pub enum BarAction {
     ImportStreamList,
     ExportStreamList,
     BlenderLive,
+    /// Build › Pingmator link: turn the loopback link on or off.
+    PingmatorLink,
     ShowHuds(bool),
     HudZoom(f32),
     #[default]
@@ -1747,6 +1749,16 @@ fn build_menu(
     }
     if menu::item(ui, p, "cube-3d-sphere", aurora_i18n::tr!("blender-live-title")) {
         *action = BarAction::BlenderLive;
+    }
+    if menu::check(
+        ui,
+        p,
+        "link-filled",
+        aurora_i18n::tr!("pingmator-link-menu"),
+        panels.pingmator_link,
+        true,
+    ) {
+        *action = BarAction::PingmatorLink;
     }
 }
 
