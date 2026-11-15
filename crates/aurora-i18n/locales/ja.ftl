@@ -14623,9 +14623,3 @@ joystick-layout-positional = 位置に基づく
 joystick-layout-auto = 自動
 joystick-layout-xinput = XInput
 
-pingmator-link-menu = Pingmator リンク
-pingmator-link-on = Pingmator リンクをオンにしました。このコンピューターの Pingmator を待っています（ポート { $port }）。
-pingmator-link-off = Pingmator リンクをオフにしました。
-pingmator-link-connected = { $client } が接続しました。ポーズはあなたのアバターに表示され、あなたにだけ見えます。
-pingmator-link-failed = Pingmator リンクを開始できませんでした：{ $error }
-pingmator-link-no-skeleton = アバターのスケルトンがまだ読み込まれていません

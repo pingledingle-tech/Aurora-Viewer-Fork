@@ -123,7 +123,6 @@ mod pay;
 mod photo_isolate;
 mod photo_reel;
 mod physics_editor;
-mod pingmator_link;
 mod plate_click;
 mod pointing;
 mod quick_prefs;
@@ -1150,7 +1149,6 @@ pub struct App {
     gesture_state: gestures::State,
     imports: crate::imports::Imports,
     blender_live: crate::blender_live::Live,
-    pingmator_link: crate::pingmator_link::Link,
     task_transfer: std::collections::VecDeque<ui::inventory::task_drop::PendingTransfer>,
     /// "Copy to inventory" of objects' contents (app/contents_copy.rs).
     contents_copies: contents_copy::ContentsCopies,
@@ -2106,7 +2104,6 @@ impl App {
             gesture_state: Default::default(),
             imports: Default::default(),
             blender_live: Default::default(),
-            pingmator_link: Default::default(),
             task_transfer: Default::default(),
             contents_copies: Default::default(),
             world_edits: Default::default(),
@@ -3382,8 +3379,6 @@ impl App {
         self.blender_live.stop();
         self.clear_blender_preview();
         self.blender_live = Default::default();
-        self.pingmator_link.stop();
-        self.panels.pingmator_link = false;
         if let Some(g) = &mut self.gfx {
             self.scene.clear(&mut g.renderer);
         }
@@ -11058,7 +11053,6 @@ impl App {
             self.scene.poser = self.ik_editor.pose_layers(&self.world);
             self.outfit_portrait_pose();
             self.ik_editor.tick_pose_storage(&self.scene.jobs, &self.egui_ctx, &self.world);
-            self.tick_pingmator_link();
             if !self.scene.poser.is_empty() {
                 self.scene.ik_edit = Default::default();
             }
@@ -15470,7 +15464,6 @@ impl App {
             BarAction::BlenderLive => {
                 ui::widgets::open_floater(&self.egui_ctx, "blender_live", &mut self.blender_live.open);
             }
-            BarAction::PingmatorLink => self.toggle_pingmator_link(),
             BarAction::EditParticles => self.open_particle_editor(),
             BarAction::SaveToObjectContents => self.build.save_to_contents(&mut self.world),
             BarAction::BuildOptions(options) => {

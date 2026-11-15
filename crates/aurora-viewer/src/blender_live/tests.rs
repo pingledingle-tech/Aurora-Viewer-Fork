@@ -1103,7 +1103,7 @@ fn blender_lods_transport_negotiates_ignores_stale_results_and_keeps_live_revisi
 // Live poses over LiveMesh (pose.rs).
 
 /// A pose saved by Pingmator's own test: the left forearm turned on frame 5.
-const POSE_BVH: &str = include_str!("../pingmator_link/pingmator_pose.bvh");
+const POSE_BVH: &str = include_str!("pose_test.bvh");
 
 fn pose_skeleton() -> aurora_assets::Skeleton {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/character/avatar_skeleton.xml");

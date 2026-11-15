@@ -14706,9 +14706,3 @@ joystick-layout-positional = Positionnelle
 joystick-layout-auto = Automatique
 joystick-layout-xinput = XInput
 
-pingmator-link-menu = Lien Pingmator
-pingmator-link-on = Lien Pingmator activé : en attente de Pingmator sur cet ordinateur (port { $port }).
-pingmator-link-off = Lien Pingmator désactivé.
-pingmator-link-connected = { $client } est connecté. Ses poses s'affichent sur votre avatar, visibles par vous seul.
-pingmator-link-failed = Le lien Pingmator n'a pas pu démarrer : { $error }
-pingmator-link-no-skeleton = le squelette de l'avatar n'est pas encore chargé

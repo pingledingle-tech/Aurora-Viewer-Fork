@@ -1169,11 +1169,6 @@ a server-wide parcel inventory. Reference: `FSAreaSearch::findObjects`,
 `isSearchableObject`, `matchObject`, `processRequestQueue`, `requestObjectProperties`
 (`indra/newview/fsareasearch.cpp`).
 
-`pingmator_link/` is the opt-in loopback link with the Pingmator animation editor: one client on
-127.0.0.1:17656, newline-delimited JSON, poses sent as small BVH and decoded on its own thread.
-`app/pingmator_link.rs` (Build › Pingmator link) lays the latest pose on the agent's local poser
-session through `ik_edit::Editor::apply_link_pose`; nothing reaches the simulator.
-
 `blender_live/pose.rs` adds live poses to LiveMesh for local tools (Pingmator): the `auth` feature
 (a session key in `livemesh.json`, HMAC-SHA256 answer to the `hello` challenge) and `pose-bvh`
 messages, taken before the controls and the mesh path, decoded on the transport worker and laid on
