@@ -7,7 +7,10 @@ fn parses_the_messages() {
         parse(br#"{"type":"hello","app":"Pingmator"}"#),
         Ok(Message::Hello(Some("Pingmator".into())))
     );
-    assert_eq!(parse(br#"{"type":"pose","bvh":"HIERARCHY"}"#), Ok(Message::Pose("HIERARCHY".into())));
+    assert_eq!(
+        parse(br#"{"type":"pose","bvh":"HIERARCHY"}"#),
+        Ok(Message::Pose("HIERARCHY".into()))
+    );
     assert_eq!(parse(br#"{"type":"later"}"#), Ok(Message::Unknown));
     assert!(parse(br#"{"type":"pose"}"#).is_err());
     assert!(parse(b"not json").is_err());

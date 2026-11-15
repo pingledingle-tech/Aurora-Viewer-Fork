@@ -1174,6 +1174,10 @@ a server-wide parcel inventory. Reference: `FSAreaSearch::findObjects`,
 `app/pingmator_link.rs` (Build › Pingmator link) lays the latest pose on the agent's local poser
 session through `ik_edit::Editor::apply_link_pose`; nothing reaches the simulator.
 
+`blender_live/pose.rs` adds live poses to LiveMesh for local tools (Pingmator): the `auth` feature
+(a session key in `livemesh.json`, HMAC-SHA256 answer to the `hello` challenge) and `pose-bvh`
+messages, taken before the controls and the mesh path, decoded on the transport worker and laid on
+the agent's local poser by `app/blender_live.rs` (`ik_edit::Editor::apply_link_pose`).
 `blender_live/` implements LiveMesh: the opt-in loopback Blender transport, bounded v1 rest-mesh
 snapshots and UI. Both matching Blender package layouts are bundled by
 `blender_live/addon.rs` and exported to ZIP on a worker, using the shared atomic

@@ -855,3 +855,36 @@ Missing material/image fields preserve the original v1 color-only behavior.
 Blender API references: [evaluated dependency graph](https://docs.blender.org/api/4.3/bpy.types.Depsgraph.html),
 [object mesh capture](https://docs.blender.org/api/4.3/bpy.types.Object.html#bpy.types.Object.to_mesh),
 [mesh corner normals and triangulation](https://docs.blender.org/api/4.3/bpy.types.Mesh.html).
+
+## Live poses
+
+LiveMesh also takes live poses from local tools such as the Pingmator
+animation editor. The pose shows on your own avatar through the local Poser,
+visible to you only; nothing is sent to the region. When the Poser has no
+session yet, the pose waits for the next frame. The chat says which tool is
+connected. The Blender add-on is not affected: it asks for neither feature.
+
+When LiveMesh starts and the avatar skeleton is loaded, the `hello` also lists
+`auth` and `pose-bvh` and carries `challenge`, 32 random bytes in hex. At the
+same time the viewer writes a new random 32-byte session key to
+`livemesh.json` in its local data folder (Windows:
+`%LOCALAPPDATA%\Aurora\AuroraViewer\data`; created readable by its owner
+only on other systems), with `protocol`, `port`, `key` (hex) and `pid`. The
+file is removed when LiveMesh stops.
+
+Pose messages use the normal four-byte framing and are recognised before the
+controls and snapshots, so a pose is never read as a mesh. Each gets one JSON
+line back: `{"ok":true}` or `{"ok":false,"error":"..."}`.
+
+- `{"type":"auth","client":"<name> <version>","response":"<hex>"}`:
+  `response` is HMAC-SHA256 of the challenge bytes with the key. The key
+  itself never crosses the socket. A wrong answer gets
+  `"error":"unauthorized"` and the connection is closed. The client name is
+  cut to 64 characters, control characters removed.
+- `{"type":"pose-bvh","bvh":"<BVH text>"}`: only after a successful `auth`
+  (otherwise `unauthorized` and close). The BVH is read like a Poser pose file
+  (`parse_bvh_pose`, its first frame after the neutral one); Pingmator sends a
+  neutral frame, then the pose twice. A pose message is at most 1 MiB.
+
+A viewer started without the skeleton, or one that cannot write the key file,
+offers meshes only and answers pose messages with an error.

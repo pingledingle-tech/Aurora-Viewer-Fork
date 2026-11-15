@@ -55,7 +55,9 @@ impl Link {
     /// skeleton is loaded (the BVH joints are matched against it).
     pub fn start(&mut self, port: u16, skeleton: Option<&Skeleton>) -> Result<(), String> {
         self.stop();
-        let skeleton = skeleton.cloned().ok_or_else(|| aurora_i18n::tr!("pingmator-link-no-skeleton").to_string())?;
+        let skeleton = skeleton
+            .cloned()
+            .ok_or_else(|| aurora_i18n::tr!("pingmator-link-no-skeleton").to_string())?;
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).map_err(|e| e.to_string())?;
         self.shared = Some(start_listener(listener, skeleton).map_err(|e| e.to_string())?);
         log::info!("pingmator link: listening on 127.0.0.1:{port}");

@@ -13575,6 +13575,8 @@ build-material-tint-needs-specular = この色合いを編集するには鏡面�
 build-material-tint-needs-pbr = これらの色合いを編集するには、選択したすべての面にＰＢＲマテリアルを適用してください。
 
 blender-live-title = LiveMesh
+blender-live-pose-connected = { $client } が LiveMesh に接続しました。ポーズはあなたのアバターに表示され、あなたにだけ見えます。
+blender-live-pose-unknown-client = ポーズツール
 blender-live-invalid-source = ライブオブジェクトの識別子が無効か、重複しています。
 blender-live-connection = 接続
 blender-live-objects = オブジェクト

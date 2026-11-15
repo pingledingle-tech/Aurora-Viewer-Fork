@@ -613,7 +613,10 @@ impl Editor {
             return Err(animation);
         };
         let now = std::time::Instant::now();
-        let burst = self.poser.link_last.is_some_and(|t| now.duration_since(t) < std::time::Duration::from_secs(1));
+        let burst = self
+            .poser
+            .link_last
+            .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_secs(1));
         self.poser.link_last = Some(now);
         apply_animation(&world.avatar_lib.rig, session, animation, document::LoadMode::All, !burst);
         self.refresh = true;
@@ -735,7 +738,13 @@ impl Editor {
 }
 /// A loaded or linked animation's first frame laid on a pose session: the
 /// joints it drives replace the captured ones.
-fn apply_animation(rig: &Rig, session: &mut data::Session, animation: aurora_assets::Animation, mode: document::LoadMode, checkpoint: bool) {
+fn apply_animation(
+    rig: &Rig,
+    session: &mut data::Session,
+    animation: aurora_assets::Animation,
+    mode: document::LoadMode,
+    checkpoint: bool,
+) {
     let mut pose = ik::LocalPose {
         rotations: session.pose.rotations.clone(),
         positions: session.pose.positions.clone(),
