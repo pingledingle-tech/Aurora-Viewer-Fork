@@ -1150,7 +1150,7 @@ fn live_pose_messages_are_told_apart_from_meshes() {
     assert_eq!(pose::parse(&serde_json::to_vec(&triangle()).expect("snapshot")), None);
     assert_eq!(pose::parse(b"LODS{}"), None);
     assert_eq!(pose::parse(b"not json"), None);
-    let long = format!(r#"{{"type":"auth","client":"{}","response":"ab"}}"#, "x\u{7}".repeat(100));
+    let long = format!(r#"{{"type":"auth","client":"{}","response":"ab"}}"#, "x\\u0007".repeat(100));
     assert!(matches!(pose::parse(long.as_bytes()), Some(Ok(pose::Message::Auth { client: Some(name), .. })) if name == "x".repeat(64)));
 }
 
