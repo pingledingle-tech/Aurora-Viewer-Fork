@@ -1225,7 +1225,7 @@ fn live_pose_needs_auth_and_keeps_meshes_working() {
     // a pose before auth closes the connection
     let (mut stream, mut reader, hello) = pose_connect(port);
     let features = hello["features"].as_array().expect("features");
-    assert!(features.iter().any(|f| f == "auth") && features.iter().any(|f| f == "pose-bvh"));
+    assert!(features.iter().any(|f| f == "auth") && features.iter().any(|f| f == "pose-bvh") && features.iter().any(|f| f == "pose"));
     let reply = pose_exchange(&mut stream, &mut reader, &pose).expect("reply");
     assert_eq!(reply["error"], "unauthorized");
     assert!(pose_closed(&mut reader));
@@ -1260,6 +1260,18 @@ fn live_pose_needs_auth_and_keeps_meshes_working() {
     let bad = br#"{"type":"pose-bvh","bvh":"not a bvh"}"#;
     assert_eq!(pose_exchange(&mut stream, &mut reader, bad).expect("reply")["ok"], false);
     assert!(shared.pose.lock().is_none(), "a bad pose is not applied");
+    let quaternions = br#"{"type":"pose","rotations":{"mHead":[0.0,0.0,0.3826834,0.9238795]}}"#;
+    assert_eq!(pose_exchange(&mut stream, &mut reader, quaternions).expect("reply")["ok"], true);
+    assert!(
+        shared
+            .pose
+            .lock()
+            .take()
+            .expect("pose")
+            .joints
+            .iter()
+            .any(|j| j.joint_name == "mHead")
+    );
     let snapshot = serde_json::to_vec(&triangle()).expect("snapshot");
     assert_eq!(pose_exchange(&mut stream, &mut reader, &snapshot).expect("reply")["revision"], 1);
     assert!(shared.pose.lock().is_none(), "a snapshot is never read as a pose");
@@ -1282,4 +1294,56 @@ fn live_pose_is_refused_without_the_feature() {
     assert_eq!(reply["ok"], false);
     assert!(shared.latest.lock().is_none() && shared.pose.lock().is_none());
     drop(owner);
+}
+
+#[test]
+fn live_pose_quaternions_match_the_bvh_pose() {
+    let skeleton = pose_skeleton();
+    // Pingmator's test pose: lForeArm (channels Y, Z, X) turned by x 10, y 20, z 30.
+    let bvh = pose::decode(POSE_BVH, &skeleton).expect("BVH pose");
+    let from_bvh = bvh
+        .joints
+        .iter()
+        .find(|j| j.joint_name == "mElbowLeft")
+        .and_then(|j| j.rot_keys.first())
+        .expect("elbow")
+        .rotation;
+    // the client side: channels applied in their order, then BVH axes -> SL axes
+    let axis = |v: glam::Vec3, deg: f32| glam::Quat::from_axis_angle(v, deg.to_radians());
+    let q = axis(glam::Vec3::X, 10.0) * axis(glam::Vec3::Z, 30.0) * axis(glam::Vec3::Y, 20.0);
+    let sl = [q.z, q.x, q.y, q.w];
+    let message = serde_json::to_vec(&serde_json::json!({
+        "type": "pose",
+        "rotations": {"lForeArm": sl, "mHead": [0.0, 0.0, 0.0, 1.0], "notAJoint": [0.0, 0.0, 0.0, 1.0]},
+        "positions": {"hip": [0.0, 0.0, 0.1]},
+    }))
+    .expect("pose");
+    let Some(Ok(pose::Message::Quaternions { rotations, positions })) = pose::parse(&message) else {
+        panic!("pose message");
+    };
+    let animation = pose::quaternion_pose(&rotations, &positions, &skeleton).expect("pose");
+    let joint = |name: &str| animation.joints.iter().find(|j| j.joint_name == name);
+    let elbow = joint("mElbowLeft").expect("alias resolved").rot_keys[0].rotation;
+    assert!(elbow.angle_between(from_bvh) < 1e-4, "{elbow:?} vs {from_bvh:?}");
+    assert!(joint("mHead").is_some());
+    assert!(
+        animation.joints.iter().all(|j| j.joint_name != "notAJoint"),
+        "unknown names are skipped"
+    );
+    let pelvis = &joint("mPelvis").expect("pelvis").pos_keys[0];
+    assert!((pelvis.position - glam::Vec3::new(0.0, 0.0, 0.1)).length() < 1e-6);
+
+    let bad = |message: serde_json::Value| {
+        let bytes = serde_json::to_vec(&message).expect("json");
+        match pose::parse(&bytes) {
+            Some(Ok(pose::Message::Quaternions { rotations, positions })) => {
+                pose::quaternion_pose(&rotations, &positions, &skeleton).is_err()
+            }
+            Some(Err(_)) => true,
+            _ => false,
+        }
+    };
+    assert!(bad(serde_json::json!({"type":"pose"})));
+    assert!(bad(serde_json::json!({"type":"pose","rotations":{"mHead":[0.0,0.0,0.0,0.0]}})));
+    assert!(bad(serde_json::json!({"type":"pose","rotations":{"notAJoint":[0.0,0.0,0.0,1.0]}})));
 }

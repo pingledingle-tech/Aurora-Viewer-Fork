@@ -865,7 +865,7 @@ session yet, the pose waits for the next frame. The chat says which tool is
 connected. The Blender add-on is not affected: it asks for neither feature.
 
 When LiveMesh starts and the avatar skeleton is loaded, the `hello` also lists
-`auth` and `pose-bvh` and carries `challenge`, 32 random bytes in hex. At the
+`auth`, `pose-bvh` and `pose` and carries `challenge`, 32 random bytes in hex. At the
 same time the viewer writes a new random 32-byte session key to
 `livemesh.json` in its local data folder (Windows:
 `%LOCALAPPDATA%\Aurora\AuroraViewer\data`; created readable by its owner
@@ -885,6 +885,16 @@ line back: `{"ok":true}` or `{"ok":false,"error":"..."}`.
   (otherwise `unauthorized` and close). The BVH is read like a Poser pose file
   (`parse_bvh_pose`, its first frame after the neutral one); Pingmator sends a
   neutral frame, then the pose twice. A pose message is at most 1 MiB.
+- `{"type":"pose","rotations":{"<joint>":[x,y,z,w],…},"positions":{"<joint>":[x,y,z]}}`:
+  also only after `auth`. Local rotations as quaternions (x, y, z, w) in the
+  SL avatar frame (X forward, Y left, Z up), relative to the rest pose, as an
+  `.anim` stores them; positions are offsets in metres (clamped to ±5 m),
+  usually only the pelvis. Joint names are SL names; the skeleton's aliases
+  (`hip`, `lForeArm`…) are accepted, unknown names are skipped, at most 256
+  joints. Joints the message does not name keep the Poser's pose. A BVH
+  rotation maps to it by applying the channels in their order (each new axis
+  multiplied in front), then turning BVH axes into SL axes: vector part
+  (x, y, z) becomes (z, x, y).
 
 A viewer started without the skeleton, or one that cannot write the key file,
 offers meshes only and answers pose messages with an error.

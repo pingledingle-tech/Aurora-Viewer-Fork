@@ -606,7 +606,7 @@
 
 - 🟡 Live poses over LiveMesh (fork of pingledingle-tech, human request 2026-11-15; task `livemesh-pose`; no issue): replaces the separate Pingmator link. LiveMesh gains the `auth` feature (new random key per session in `livemesh.json`, readable by the user only; the client answers the `hello` challenge with HMAC-SHA256) and `pose-bvh` (a small BVH read like a Poser pose file, laid on the agent through the local poser). The Blender add-on and the mesh path are unchanged. See docs/BLENDER_LIVE.md, "Live poses".
   - ✅ Human check on Windows 2026-11-15 (demo mode): Pingmator poses show on the avatar; the Blender add-on still works on the same build.
-  - ⬜ `pose` with quaternions per SL joint.
+  - 🟡 `pose` with quaternions per SL joint (aliases accepted; tested against the BVH path with Pingmator's test pose); human check pending.
   - ✅ The separate Pingmator link (`pingmator_link/`, Build › Pingmator link, port 17656) is removed; its tests moved to `blender_live` (`pose_test.bvh`).
   - ⬜ Play, pause and frame position following each other both ways; the agent's shape and Poser poses sent back to Pingmator (own avatar only).
 - ✅ LiveMesh textures and rigged body-kit accessories (#1455, reporter 2026-10-29; task `livemesh-rigged-textures`; validated by the human on the grid with Blender 3.6 on 2026-10-30): plug-in 0.14.7 reads byte images tagged with Blender 3.x's "Raw" and "Linear" (and ACES-style aliases) and float images in any space. A material the live preview cannot capture no longer drops the mesh: it syncs in the viewport display colour, with "Textures skipped, plain color shown: <reason>" on the object; Import / LOD stays strict.

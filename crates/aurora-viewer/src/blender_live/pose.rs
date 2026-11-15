@@ -12,8 +12,17 @@
 //! HMAC-SHA256(key, challenge), so the key never crosses the socket. Mesh
 //! snapshots without `auth` keep working as before (the Blender add-on).
 //! See docs/BLENDER_LIVE.md, "Live poses".
+//!
+//! Two pose messages: `pose-bvh` (a small BVH, read like a Poser pose file)
+//! and `pose` (local rotations as quaternions per SL joint, in the SL avatar
+//! frame: X forward, Y left, Z up; the pelvis offset in metres), which skips
+//! the BVH text and its Euler angles.
 
-use aurora_assets::{Animation, Skeleton};
+use aurora_assets::{
+    Animation, JointMotion, Skeleton,
+    anim::{PosKey, RotKey},
+};
+use glam::{Quat, Vec3};
 use sha2::{Digest, Sha256};
 use std::{io, path::PathBuf};
 
@@ -77,9 +86,20 @@ pub(super) fn verify(key: &[u8; 32], challenge: &[u8; 32], response: &str) -> bo
 /// the mesh snapshots, as before.
 #[derive(Debug, PartialEq)]
 pub(super) enum Message {
-    Auth { client: Option<String>, response: String },
+    Auth {
+        client: Option<String>,
+        response: String,
+    },
     Pose(String),
+    /// `pose`: joint name -> rotation (x, y, z, w), joint name -> offset (m).
+    Quaternions {
+        rotations: Vec<(String, [f32; 4])>,
+        positions: Vec<(String, [f32; 3])>,
+    },
 }
+
+/// A pose names at most this many joints (the SL skeleton has 133 bones).
+const MAX_POSE_JOINTS: usize = 256;
 
 /// Reads a pose-feature message. `None` when the bytes are not one (the
 /// caller then treats them as before); an error when they are one but
@@ -92,6 +112,8 @@ pub(super) fn parse(bytes: &[u8]) -> Option<Result<Message, String>> {
         client: Option<String>,
         response: Option<String>,
         bvh: Option<String>,
+        rotations: Option<std::collections::BTreeMap<String, [f32; 4]>>,
+        positions: Option<std::collections::BTreeMap<String, [f32; 3]>>,
     }
     if bytes.len() > MAX_MESSAGE || !bytes.starts_with(b"{") {
         return None;
@@ -106,6 +128,20 @@ pub(super) fn parse(bytes: &[u8]) -> Option<Result<Message, String>> {
             None => Err("auth without response".into()),
         }),
         "pose-bvh" => Some(raw.bvh.map(Message::Pose).ok_or_else(|| "pose-bvh without bvh".to_string())),
+        "pose" => Some(match raw.rotations {
+            Some(rotations) => {
+                let positions = raw.positions.unwrap_or_default();
+                if rotations.len() > MAX_POSE_JOINTS || positions.len() > MAX_POSE_JOINTS {
+                    Err("too many joints in pose".into())
+                } else {
+                    Ok(Message::Quaternions {
+                        rotations: rotations.into_iter().collect(),
+                        positions: positions.into_iter().collect(),
+                    })
+                }
+            }
+            None => Err("pose without rotations".into()),
+        }),
         _ => None,
     }
 }
@@ -115,6 +151,73 @@ pub(super) fn decode(bvh: &str, skeleton: &Skeleton) -> Result<Animation, String
     aurora_assets::import_animation::parse_bvh_pose(bvh.as_bytes(), skeleton)
         .map(|b| b.animation)
         .map_err(|e| e.to_string())
+}
+
+/// The track of a joint in `joints` (created on first use), by SL name or
+/// alias; `None` for a name the skeleton does not know.
+fn track(joints: &mut Vec<JointMotion>, skeleton: &Skeleton, name: &str) -> Option<usize> {
+    let name = &skeleton.joints[skeleton.find(name)?].name;
+    if let Some(i) = joints.iter().position(|j| &j.joint_name == name) {
+        return Some(i);
+    }
+    joints.push(JointMotion {
+        joint_name: name.clone(),
+        priority: 2,
+        rot_keys: Vec::new(),
+        pos_keys: Vec::new(),
+    });
+    Some(joints.len() - 1)
+}
+
+/// A `pose` message as a one-frame animation, the shape `parse_bvh_pose`
+/// gives the Poser: SL joint names (aliases accepted), rotations in the SL
+/// avatar frame relative to the rest pose, the pelvis offset in metres.
+pub(super) fn quaternion_pose(
+    rotations: &[(String, [f32; 4])],
+    positions: &[(String, [f32; 3])],
+    skeleton: &Skeleton,
+) -> Result<Animation, String> {
+    let mut joints: Vec<JointMotion> = Vec::new();
+    for (name, [x, y, z, w]) in rotations {
+        let q = Quat::from_xyzw(*x, *y, *z, *w);
+        if !q.is_finite() || q.length_squared() < 1e-6 {
+            return Err(format!("invalid rotation for {name}"));
+        }
+        if let Some(i) = track(&mut joints, skeleton, name) {
+            joints[i].rot_keys = vec![RotKey {
+                time: 0.0,
+                rotation: q.normalize(),
+            }];
+        }
+    }
+    for (name, [x, y, z]) in positions {
+        let p = Vec3::new(*x, *y, *z);
+        if !p.is_finite() {
+            return Err(format!("invalid position for {name}"));
+        }
+        if let Some(i) = track(&mut joints, skeleton, name) {
+            joints[i].pos_keys = vec![PosKey {
+                time: 0.0,
+                position: p.clamp(Vec3::splat(-5.0), Vec3::splat(5.0)),
+            }];
+        }
+    }
+    if joints.is_empty() {
+        return Err("pose names no known joint".into());
+    }
+    Ok(Animation {
+        base_priority: 2,
+        duration: 1.0,
+        emote_name: String::new(),
+        loop_in: 0.0,
+        loop_out: 1.0,
+        looping: false,
+        ends_after: None,
+        ease_in: 0.3,
+        ease_out: 0.3,
+        hand_pose: 1,
+        joints,
+    })
 }
 
 fn key_path() -> Option<PathBuf> {

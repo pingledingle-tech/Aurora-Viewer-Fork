@@ -123,7 +123,7 @@ fn serve(
     if pose.is_some()
         && let Some(features) = hello["features"].as_array_mut()
     {
-        features.extend(["auth".into(), "pose-bvh".into()]);
+        features.extend(["auth".into(), "pose-bvh".into(), "pose".into()]);
         hello["challenge"] = super::pose::hex(&challenge).into();
     }
     writeln!(stream, "{hello}")?;
@@ -175,7 +175,7 @@ fn serve(
                     shared.pose_notice.store(true, Ordering::Release);
                     reply(stream, shared, serde_json::json!({"ok": true}))?;
                 }
-                Ok(super::pose::Message::Pose(_)) if !authenticated => {
+                Ok(super::pose::Message::Pose(_) | super::pose::Message::Quaternions { .. }) if !authenticated => {
                     reply(stream, shared, serde_json::json!({"ok": false, "error": "unauthorized"}))?;
                     return Err(io::ErrorKind::PermissionDenied.into());
                 }
@@ -186,6 +186,15 @@ fn serve(
                     }
                     Err(error) => reply(stream, shared, serde_json::json!({"ok": false, "error": error}))?,
                 },
+                Ok(super::pose::Message::Quaternions { rotations, positions }) => {
+                    match super::pose::quaternion_pose(&rotations, &positions, &pose.skeleton) {
+                        Ok(animation) => {
+                            *shared.pose.lock() = Some(animation);
+                            reply(stream, shared, serde_json::json!({"ok": true}))?;
+                        }
+                        Err(error) => reply(stream, shared, serde_json::json!({"ok": false, "error": error}))?,
+                    }
+                }
                 Err(error) => reply(stream, shared, serde_json::json!({"ok": false, "error": error}))?,
             }
             ctx.request_repaint();
