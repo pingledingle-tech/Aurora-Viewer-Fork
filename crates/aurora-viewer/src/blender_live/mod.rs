@@ -9,6 +9,7 @@ pub(crate) mod import;
 mod installer;
 mod links;
 pub mod objects;
+mod pose;
 pub mod protocol;
 pub(crate) mod shape;
 #[cfg(test)]
@@ -55,6 +56,8 @@ pub struct Status {
     pub import_capable: bool,
     pub received: u64,
     pub error: Option<String>,
+    /// The tool sending live poses, once it has passed `auth` (pose.rs).
+    pub pose_client: Option<String>,
 }
 
 #[derive(Default)]
@@ -68,10 +71,17 @@ pub(crate) struct Shared {
     pub import_request: Mutex<Option<import::Request>>,
     pub import_expected: Mutex<Option<import::Request>>,
     pub import_result: Mutex<Option<(Uuid, Result<import::Bundle, String>)>>,
+    /// The newest live pose decoded on the socket thread (pose.rs).
+    pub pose: Mutex<Option<aurora_assets::Animation>>,
+    /// Set when a pose tool authenticates; taken by the frame for the notice.
+    pub pose_notice: AtomicBool,
 }
 
 struct Server {
     shared: Arc<Shared>,
+    /// The session key of live poses; its file goes away with the server.
+    #[allow(dead_code)]
+    key: Option<pose::KeyFile>,
 }
 impl Drop for Server {
     fn drop(&mut self) {
@@ -114,6 +124,8 @@ pub struct Live {
     pub next_local_id: u32,
     pub attach_choices: Vec<(u8, bool, String)>,
     pub placement_dirty: HashSet<Uuid>,
+    /// A live pose waiting for the poser to have a session for the agent.
+    pub pose_pending: Option<aurora_assets::Animation>,
 }
 impl Default for Live {
     fn default() -> Self {
@@ -151,6 +163,7 @@ impl Default for Live {
             next_local_id: 1,
             attach_choices: Vec::new(),
             placement_dirty: HashSet::new(),
+            pose_pending: None,
         }
     }
 }
@@ -281,23 +294,58 @@ impl Live {
         rest_axes: std::collections::HashMap<String, [f32; 16]>,
         ctx: &egui::Context,
         pool: Arc<aurora_render::StagingPool>,
+        skeleton: Option<aurora_assets::Skeleton>,
     ) {
         if self.running() {
             return;
         }
-        match transport::start(self.port, supported, rest_axes, ctx.clone(), Some(pool)) {
+        // Live poses need the avatar skeleton (to read the BVH) and a key
+        // file; without either, LiveMesh starts for meshes only.
+        let key = pose::random_bytes();
+        let key_file = skeleton.as_ref().and_then(|_| match pose::KeyFile::create(self.port, &key) {
+            Ok(file) => Some(file),
+            Err(error) => {
+                log::warn!("LiveMesh: live poses off, the key file could not be written: {error}");
+                None
+            }
+        });
+        let link = skeleton
+            .filter(|_| key_file.is_some())
+            .map(|skeleton| Arc::new(pose::PoseLink { key, skeleton }));
+        match transport::start(self.port, supported, rest_axes, ctx.clone(), Some(pool), link) {
             Ok(shared) => {
-                self.server = Some(Server { shared });
+                self.server = Some(Server { shared, key: key_file });
                 self.error = None;
             }
             Err(e) => self.error = Some(e.to_string()),
         }
     }
 
+    /// The newest live pose, or the one the poser could not take yet.
+    pub fn take_pose(&mut self) -> Option<aurora_assets::Animation> {
+        let latest = self.server.as_ref().and_then(|server| server.shared.pose.lock().take());
+        latest.or_else(|| self.pose_pending.take())
+    }
+
+    /// Keeps a pose for the next frame (the poser had no session yet).
+    pub fn keep_pose(&mut self, animation: aurora_assets::Animation) {
+        self.pose_pending = Some(animation);
+    }
+
+    /// The name of a pose tool that has just authenticated, once.
+    pub fn take_pose_client(&self) -> Option<String> {
+        let shared = &self.server.as_ref()?.shared;
+        if !shared.pose_notice.swap(false, Ordering::AcqRel) {
+            return None;
+        }
+        shared.status.lock().pose_client.clone()
+    }
+
     pub fn stop(&mut self) {
         self.import = Default::default();
         self.start_requested = false;
         self.server = None;
+        self.pose_pending = None;
         self.clear = true;
     }
 

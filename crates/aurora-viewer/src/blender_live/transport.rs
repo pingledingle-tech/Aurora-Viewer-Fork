@@ -13,17 +13,30 @@ pub(super) fn start(
     rest_axes: std::collections::HashMap<String, [f32; 16]>,
     ctx: egui::Context,
     pool: Option<Arc<aurora_render::StagingPool>>,
+    pose: Option<Arc<super::pose::PoseLink>>,
 ) -> io::Result<Arc<Shared>> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
-    start_listener(listener, supported, rest_axes, ctx, pool)
+    start_listener_with(listener, supported, rest_axes, ctx, pool, pose)
 }
 
+#[cfg(test)]
 pub(super) fn start_listener(
     listener: TcpListener,
     supported: HashSet<String>,
     rest_axes: std::collections::HashMap<String, [f32; 16]>,
     ctx: egui::Context,
     pool: Option<Arc<aurora_render::StagingPool>>,
+) -> io::Result<Arc<Shared>> {
+    start_listener_with(listener, supported, rest_axes, ctx, pool, None)
+}
+
+pub(super) fn start_listener_with(
+    listener: TcpListener,
+    supported: HashSet<String>,
+    rest_axes: std::collections::HashMap<String, [f32; 16]>,
+    ctx: egui::Context,
+    pool: Option<Arc<aurora_render::StagingPool>>,
+    pose: Option<Arc<super::pose::PoseLink>>,
 ) -> io::Result<Arc<Shared>> {
     listener.set_nonblocking(true)?;
     let shared = Arc::new(Shared::default());
@@ -32,7 +45,7 @@ pub(super) fn start_listener(
         while !worker.stop.load(Ordering::Acquire) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    if let Err(error) = serve(&mut stream, &worker, &supported, &rest_axes, &ctx, pool.as_deref())
+                    if let Err(error) = serve(&mut stream, &worker, &supported, &rest_axes, &ctx, pool.as_deref(), pose.as_deref())
                         && !worker.stop.load(Ordering::Acquire)
                         && !matches!(
                             error.kind(),
@@ -45,6 +58,7 @@ pub(super) fn start_listener(
                     worker.status.lock().shape_capable = false;
                     worker.status.lock().shape_apply_capable = false;
                     worker.status.lock().import_capable = false;
+                    worker.status.lock().pose_client = None;
                     worker.import_request.lock().take();
                     worker.import_expected.lock().take();
                     worker.shape.lock().take();
@@ -90,6 +104,7 @@ fn serve(
     rest_axes: &std::collections::HashMap<String, [f32; 16]>,
     ctx: &egui::Context,
     pool: Option<&aurora_render::StagingPool>,
+    pose: Option<&super::pose::PoseLink>,
 ) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_millis(150)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
@@ -101,8 +116,18 @@ fn serve(
     }
     let mut joints: Vec<_> = supported.iter().collect();
     joints.sort();
-    let hello = serde_json::json!({ "protocol": protocol::VERSION, "joints": joints, "rest_axes": rest_axes, "max_bytes": protocol::MAX_BYTES, "max_decoded_bytes": protocol::MAX_DECODED_BYTES, "features": ["pbr-materials", "source-ids", "shape-transfer", "shape-apply", "import-lods", "static-meshes", "object-links", "compressed-snapshots", "packed-geometry"] });
+    let mut hello = serde_json::json!({ "protocol": protocol::VERSION, "joints": joints, "rest_axes": rest_axes, "max_bytes": protocol::MAX_BYTES, "max_decoded_bytes": protocol::MAX_DECODED_BYTES, "features": ["pbr-materials", "source-ids", "shape-transfer", "shape-apply", "import-lods", "static-meshes", "object-links", "compressed-snapshots", "packed-geometry"] });
+    // Live poses need the session key (pose.rs); a client that does not ask
+    // for them (the Blender add-on) ignores the challenge.
+    let challenge = super::pose::random_bytes();
+    if pose.is_some()
+        && let Some(features) = hello["features"].as_array_mut()
+    {
+        features.extend(["auth".into(), "auth-mutual".into(), "pose-bvh".into(), "pose".into()]);
+        hello["challenge"] = super::pose::hex(&challenge).into();
+    }
     writeln!(stream, "{hello}")?;
+    let mut authenticated = false;
     {
         let mut status = shared.status.lock();
         status.connected = true;
@@ -128,6 +153,59 @@ fn serve(
         }
         let mut bytes = vec![0; len];
         read(stream, &mut bytes, shared, Duration::from_secs(5))?;
+        // Pose messages are taken before the controls and the mesh path, so
+        // a pose is never read as a snapshot.
+        if let Some(message) = super::pose::parse(&bytes) {
+            let Some(pose) = pose else {
+                reply(
+                    stream,
+                    shared,
+                    serde_json::json!({"ok": false, "error": "live poses are not available"}),
+                )?;
+                continue;
+            };
+            match message {
+                Ok(super::pose::Message::Auth { client, response, nonce }) => {
+                    if !super::pose::verify(&pose.key, &challenge, &response) {
+                        reply(stream, shared, serde_json::json!({"ok": false, "error": "unauthorized"}))?;
+                        return Err(io::ErrorKind::PermissionDenied.into());
+                    }
+                    authenticated = true;
+                    shared.status.lock().pose_client = Some(client.unwrap_or_default());
+                    shared.pose_notice.store(true, Ordering::Release);
+                    // A client that sent a nonce checks us in turn: it only
+                    // sends poses once this proof matches (`auth-mutual`).
+                    let mut answer = serde_json::json!({"ok": true});
+                    if let Some(proof) = nonce.and_then(|nonce| super::pose::server_proof(&pose.key, &nonce)) {
+                        answer["server_proof"] = proof.into();
+                    }
+                    reply(stream, shared, answer)?;
+                }
+                Ok(super::pose::Message::Pose(_) | super::pose::Message::Quaternions { .. }) if !authenticated => {
+                    reply(stream, shared, serde_json::json!({"ok": false, "error": "unauthorized"}))?;
+                    return Err(io::ErrorKind::PermissionDenied.into());
+                }
+                Ok(super::pose::Message::Pose(bvh)) => match super::pose::decode(&bvh, &pose.skeleton) {
+                    Ok(animation) => {
+                        *shared.pose.lock() = Some(animation);
+                        reply(stream, shared, serde_json::json!({"ok": true}))?;
+                    }
+                    Err(error) => reply(stream, shared, serde_json::json!({"ok": false, "error": error}))?,
+                },
+                Ok(super::pose::Message::Quaternions { rotations, positions }) => {
+                    match super::pose::quaternion_pose(&rotations, &positions, &pose.skeleton) {
+                        Ok(animation) => {
+                            *shared.pose.lock() = Some(animation);
+                            reply(stream, shared, serde_json::json!({"ok": true}))?;
+                        }
+                        Err(error) => reply(stream, shared, serde_json::json!({"ok": false, "error": error}))?,
+                    }
+                }
+                Err(error) => reply(stream, shared, serde_json::json!({"ok": false, "error": error}))?,
+            }
+            ctx.request_repaint();
+            continue;
+        }
         if bytes.starts_with(b"LODS") {
             let expected = *shared.import_expected.lock();
             if let Some(expected) = expected
