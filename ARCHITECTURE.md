@@ -1170,7 +1170,7 @@ a server-wide parcel inventory. Reference: `FSAreaSearch::findObjects`,
 (`indra/newview/fsareasearch.cpp`).
 
 `blender_live/pose.rs` adds live poses to LiveMesh for local tools (Pingmator): the `auth` feature
-(a session key in `livemesh.json`, HMAC-SHA256 answer to the `hello` challenge) and `pose-bvh`
+(a session key in `livemesh.json`, HMAC-SHA256 answer to the `hello` challenge, and `auth-mutual`: an HMAC answer to the client's nonce) and `pose-bvh`
 and `pose` (quaternions per joint) messages, taken before the controls and the mesh path, decoded on the transport worker and laid on
 the agent's local poser by `app/blender_live.rs` (`ik_edit::Editor::apply_link_pose`).
 `blender_live/` implements LiveMesh: the opt-in loopback Blender transport, bounded v1 rest-mesh

@@ -1131,14 +1131,49 @@ fn live_pose_hmac_matches_rfc_4231() {
 }
 
 #[test]
+fn live_pose_server_proof_answers_the_clients_nonce() {
+    let key = [7; 32];
+    let nonce = "ab".repeat(16);
+    let proof = pose::server_proof(&key, &nonce).expect("valid nonce");
+    // HMAC-SHA256(key, "aurora-hello:" + the nonce bytes), in hex
+    let mut message = b"aurora-hello:".to_vec();
+    message.extend_from_slice(&[0xab; 16]);
+    assert_eq!(proof, pose::hex(&pose::hmac_sha256(&key, &message)));
+    // another key, another nonce and the hello challenge's own answer all differ
+    assert_ne!(Some(proof.clone()), pose::server_proof(&[8; 32], &nonce));
+    assert_ne!(Some(proof.clone()), pose::server_proof(&key, &"cd".repeat(16)));
+    assert_ne!(proof, pose::hex(&pose::hmac_sha256(&key, &[0xab; 16])));
+    // lengths: 16 and 64 bytes are accepted, 15 and 65 and bad hex are not
+    assert!(pose::server_proof(&key, &"00".repeat(64)).is_some());
+    assert!(pose::server_proof(&key, &"00".repeat(15)).is_none());
+    assert!(pose::server_proof(&key, &"00".repeat(65)).is_none());
+    assert!(pose::server_proof(&key, "zz").is_none());
+}
+
+#[test]
 fn live_pose_messages_are_told_apart_from_meshes() {
     assert_eq!(
         pose::parse(br#"{"type":"auth","client":"Pingmator 0.3","response":"ab"}"#),
         Some(Ok(pose::Message::Auth {
             client: Some("Pingmator 0.3".into()),
-            response: "ab".into()
+            response: "ab".into(),
+            nonce: None
         }))
     );
+    let nonce = "00".repeat(16);
+    assert_eq!(
+        pose::parse(format!(r#"{{"type":"auth","response":"ab","nonce":"{nonce}"}}"#).as_bytes()),
+        Some(Ok(pose::Message::Auth {
+            client: None,
+            response: "ab".into(),
+            nonce: Some(nonce)
+        }))
+    );
+    // a nonce that is too short, too long or not hex is refused, not ignored
+    for bad in ["", "00", "zz", &"00".repeat(15), &"00".repeat(65)] {
+        let message = format!(r#"{{"type":"auth","response":"ab","nonce":"{bad}"}}"#);
+        assert!(matches!(pose::parse(message.as_bytes()), Some(Err(_))), "nonce {bad:?}");
+    }
     assert_eq!(
         pose::parse(br#"{"type":"pose-bvh","bvh":"HIERARCHY"}"#),
         Some(Ok(pose::Message::Pose("HIERARCHY".into())))

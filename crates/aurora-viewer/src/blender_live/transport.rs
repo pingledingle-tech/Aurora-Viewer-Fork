@@ -123,7 +123,7 @@ fn serve(
     if pose.is_some()
         && let Some(features) = hello["features"].as_array_mut()
     {
-        features.extend(["auth".into(), "pose-bvh".into(), "pose".into()]);
+        features.extend(["auth".into(), "auth-mutual".into(), "pose-bvh".into(), "pose".into()]);
         hello["challenge"] = super::pose::hex(&challenge).into();
     }
     writeln!(stream, "{hello}")?;
@@ -165,7 +165,7 @@ fn serve(
                 continue;
             };
             match message {
-                Ok(super::pose::Message::Auth { client, response }) => {
+                Ok(super::pose::Message::Auth { client, response, nonce }) => {
                     if !super::pose::verify(&pose.key, &challenge, &response) {
                         reply(stream, shared, serde_json::json!({"ok": false, "error": "unauthorized"}))?;
                         return Err(io::ErrorKind::PermissionDenied.into());
@@ -173,7 +173,13 @@ fn serve(
                     authenticated = true;
                     shared.status.lock().pose_client = Some(client.unwrap_or_default());
                     shared.pose_notice.store(true, Ordering::Release);
-                    reply(stream, shared, serde_json::json!({"ok": true}))?;
+                    // A client that sent a nonce checks us in turn: it only
+                    // sends poses once this proof matches (`auth-mutual`).
+                    let mut answer = serde_json::json!({"ok": true});
+                    if let Some(proof) = nonce.and_then(|nonce| super::pose::server_proof(&pose.key, &nonce)) {
+                        answer["server_proof"] = proof.into();
+                    }
+                    reply(stream, shared, answer)?;
                 }
                 Ok(super::pose::Message::Pose(_) | super::pose::Message::Quaternions { .. }) if !authenticated => {
                     reply(stream, shared, serde_json::json!({"ok": false, "error": "unauthorized"}))?;

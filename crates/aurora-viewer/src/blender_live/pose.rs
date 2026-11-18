@@ -11,6 +11,10 @@
 //! `hello` carries a random challenge per connection; the client answers with
 //! HMAC-SHA256(key, challenge), so the key never crosses the socket. Mesh
 //! snapshots without `auth` keep working as before (the Blender add-on).
+//! The proof also runs the other way (`auth-mutual`): a client that sends a
+//! random `nonce` with its `auth` gets back `server_proof`, an HMAC of that
+//! nonce under the same key, so it can tell that the program on the port
+//! reads the key file, as Aurora does, before it sends any pose.
 //! See docs/BLENDER_LIVE.md, "Live poses".
 //!
 //! Two pose messages: `pose-bvh` (a small BVH, read like a Poser pose file)
@@ -77,6 +81,23 @@ fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// What a client's `nonce` is hashed with, so that the answer cannot be
+/// mistaken for the answer to the `hello` challenge.
+const SERVER_PROOF_PREFIX: &[u8] = b"aurora-hello:";
+
+/// The `nonce` of an `auth` message is 16 to 64 bytes, in hex.
+const NONCE_BYTES: std::ops::RangeInclusive<usize> = 16..=64;
+
+/// The server's answer to a client nonce (hex): HMAC-SHA256(key,
+/// "aurora-hello:" followed by the nonce bytes). `None` when the nonce is not
+/// valid hex or has a wrong length.
+pub(super) fn server_proof(key: &[u8; 32], nonce: &str) -> Option<String> {
+    let nonce = unhex(nonce).filter(|bytes| NONCE_BYTES.contains(&bytes.len()))?;
+    let mut message = SERVER_PROOF_PREFIX.to_vec();
+    message.extend_from_slice(&nonce);
+    Some(hex(&hmac_sha256(key, &message)))
+}
+
 /// Whether `response` (hex) is HMAC-SHA256(key, challenge).
 pub(super) fn verify(key: &[u8; 32], challenge: &[u8; 32], response: &str) -> bool {
     unhex(response).is_some_and(|response| same(&response, &hmac_sha256(key, challenge)))
@@ -89,6 +110,9 @@ pub(super) enum Message {
     Auth {
         client: Option<String>,
         response: String,
+        /// A client nonce (hex, checked by `server_proof`) asking for the
+        /// server's proof in the answer.
+        nonce: Option<String>,
     },
     Pose(String),
     /// `pose`: joint name -> rotation (x, y, z, w), joint name -> offset (m).
@@ -111,6 +135,7 @@ pub(super) fn parse(bytes: &[u8]) -> Option<Result<Message, String>> {
         kind: Option<String>,
         client: Option<String>,
         response: Option<String>,
+        nonce: Option<String>,
         bvh: Option<String>,
         rotations: Option<std::collections::BTreeMap<String, [f32; 4]>>,
         positions: Option<std::collections::BTreeMap<String, [f32; 3]>>,
@@ -121,10 +146,14 @@ pub(super) fn parse(bytes: &[u8]) -> Option<Result<Message, String>> {
     let raw = serde_json::from_slice::<Raw>(bytes).ok()?;
     match raw.kind.as_deref()? {
         "auth" => Some(match raw.response {
-            Some(response) => Ok(Message::Auth {
-                client: raw.client.map(|name| name.chars().filter(|c| !c.is_control()).take(64).collect()),
-                response,
-            }),
+            Some(response) => match raw.nonce {
+                Some(nonce) if server_proof(&[0; 32], &nonce).is_none() => Err("auth nonce is not 16 to 64 bytes in hex".into()),
+                nonce => Ok(Message::Auth {
+                    client: raw.client.map(|name| name.chars().filter(|c| !c.is_control()).take(64).collect()),
+                    response,
+                    nonce,
+                }),
+            },
             None => Err("auth without response".into()),
         }),
         "pose-bvh" => Some(raw.bvh.map(Message::Pose).ok_or_else(|| "pose-bvh without bvh".to_string())),

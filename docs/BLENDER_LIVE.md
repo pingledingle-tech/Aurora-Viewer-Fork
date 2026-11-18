@@ -865,7 +865,7 @@ session yet, the pose waits for the next frame. The chat says which tool is
 connected. The Blender add-on is not affected: it asks for neither feature.
 
 When LiveMesh starts and the avatar skeleton is loaded, the `hello` also lists
-`auth`, `pose-bvh` and `pose` and carries `challenge`, 32 random bytes in hex. At the
+`auth`, `auth-mutual`, `pose-bvh` and `pose` and carries `challenge`, 32 random bytes in hex. At the
 same time the viewer writes a new random 32-byte session key to
 `livemesh.json` in its local data folder (Windows:
 `%LOCALAPPDATA%\Aurora\AuroraViewer\data`; created readable by its owner
@@ -880,7 +880,15 @@ line back: `{"ok":true}` or `{"ok":false,"error":"..."}`.
   `response` is HMAC-SHA256 of the challenge bytes with the key. The key
   itself never crosses the socket. A wrong answer gets
   `"error":"unauthorized"` and the connection is closed. The client name is
-  cut to 64 characters, control characters removed.
+  cut to 64 characters, control characters removed. With the `auth-mutual`
+  feature the message may also carry `"nonce":"<hex>"`, 16 to 64 random bytes
+  chosen by the client. After a correct `response` the answer is then
+  `{"ok":true,"server_proof":"<hex>"}`, with `server_proof` =
+  HMAC-SHA256(key, `aurora-hello:` followed by the nonce bytes). The client
+  checks it (in constant time) before it sends a pose, so it knows that the
+  program on the port reads the key file. A nonce of another length, or not
+  in hex, gets an error answer. A client that sends no nonce gets plain
+  `{"ok":true}`, as before.
 - `{"type":"pose-bvh","bvh":"<BVH text>"}`: only after a successful `auth`
   (otherwise `unauthorized` and close). The BVH is read like a Poser pose file
   (`parse_bvh_pose`, its first frame after the neutral one); Pingmator sends a
