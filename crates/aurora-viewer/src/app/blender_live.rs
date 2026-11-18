@@ -174,6 +174,7 @@ impl App {
                 self.blender_rest_axes(),
                 &self.egui_ctx,
                 renderer.staging_pool(),
+                self.world.avatar_lib.skeleton.clone(),
             );
         }
         if self.blender_live.clear {
@@ -211,6 +212,7 @@ impl App {
                 self.blender_rest_axes(),
                 &self.egui_ctx,
                 renderer.staging_pool(),
+                self.world.avatar_lib.skeleton.clone(),
             );
             let mode = std::env::var("AURORA_DEMO_BLENDER_LIVE").unwrap_or_default();
             if mode == "plugins" || mode.starts_with("installer-") {
@@ -256,6 +258,23 @@ impl App {
                 self.scene.jobs.discard(old);
             }
             self.blender_live.owner = Some(self.world.agent_id);
+        }
+        // Live poses (blender_live/pose.rs): on our own avatar through the
+        // local poser, as the Pingmator link did; kept for the next frame
+        // while the poser has no session for the agent yet.
+        if let Some(client) = self.blender_live.take_pose_client() {
+            let client = if client.is_empty() {
+                aurora_i18n::tr!("blender-live-pose-unknown-client").to_string()
+            } else {
+                client
+            };
+            self.world
+                .system_message(aurora_i18n::tr!("blender-live-pose-connected", client = client.as_str()));
+        }
+        if let Some(animation) = self.blender_live.take_pose()
+            && let Err(animation) = self.ik_editor.apply_link_pose(&self.world, animation)
+        {
+            self.blender_live.keep_pose(animation);
         }
         if self.demo
             && self.frame_count == 450

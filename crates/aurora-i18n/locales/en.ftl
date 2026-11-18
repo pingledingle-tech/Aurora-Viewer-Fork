@@ -14655,6 +14655,8 @@ build-material-tint-needs-specular = Apply a specular map to edit this tint.
 build-material-tint-needs-pbr = Apply a PBR material to every selected face to edit these tints.
 
 blender-live-title = LiveMesh
+blender-live-pose-connected = { $client } connected to LiveMesh. Its poses show on your avatar, visible to you only.
+blender-live-pose-unknown-client = A pose tool
 blender-live-invalid-source = Invalid or duplicate live object identifier.
 blender-live-connection = Connection
 blender-live-objects = Objects

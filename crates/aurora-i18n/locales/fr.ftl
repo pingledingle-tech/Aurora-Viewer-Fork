@@ -14660,6 +14660,8 @@ build-material-tint-needs-specular = Appliquez une texture spéculaire pour modi
 build-material-tint-needs-pbr = Appliquez un matériau PBR à chaque face sélectionnée pour modifier ces teintes.
 
 blender-live-title = LiveMesh
+blender-live-pose-connected = { $client } s'est connecté à LiveMesh. Ses poses s'affichent sur votre avatar, visibles par vous seul.
+blender-live-pose-unknown-client = Un outil de pose
 blender-live-invalid-source = Identifiant d’objet live invalide ou en double.
 blender-live-connection = Connexion
 blender-live-objects = Objets
