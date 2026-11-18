@@ -236,6 +236,8 @@ pub(super) struct State {
     /// rotation, a Y past ±90° comes out as X and Z turned half a turn with
     /// Y on the other side, and the sliders jumped every frame.
     angles: Option<Angles>,
+    /// When the Pingmator link last set the pose (`apply_link_pose`).
+    link_last: Option<std::time::Instant>,
 }
 /// The angles the sliders set on a joint, and the rotation they made.
 #[derive(Clone, Copy, Debug)]
@@ -597,41 +599,34 @@ impl Editor {
                     }
                 }
                 storage::Loaded::Animation(animation, mode) => {
-                    let mut pose = ik::LocalPose {
-                        rotations: session.pose.rotations.clone(),
-                        positions: session.pose.positions.clone(),
-                    };
-                    let sample = ik::animations::Sample {
-                        animation: Arc::new(BoundAnim::bind(animation, &world.avatar_lib.rig)),
-                        frame: 0,
-                        time_seconds: None,
-                    };
-                    ik::animations::apply(&world.avatar_lib.rig, &mut pose, Vec3::ZERO, &[sample]);
-                    let selective = matches!(mode, document::LoadMode::Selective | document::LoadMode::SelectiveRotations);
-                    let rotations = matches!(mode, document::LoadMode::Rotations | document::LoadMode::SelectiveRotations);
-                    let edited: Vec<_> = (0..world.avatar_lib.rig.len()).map(|b| session.edited(b)).collect();
-                    session.checkpoint();
-                    let current = Arc::make_mut(&mut session.pose);
-                    for (bone, edited) in edited.iter().enumerate() {
-                        if selective && *edited {
-                            continue;
-                        }
-                        // a joint the file drives is the file's, not the capture's
-                        if current.rotations[bone].dot(pose.rotations[bone]).abs() < 0.9999999 {
-                            current.origin[bone] = world.avatar_lib.rig.local_rot[bone];
-                        }
-                        current.rotations[bone] = pose.rotations[bone];
-                        if !rotations {
-                            current.positions[bone] = pose.positions[bone];
-                        }
-                        current.locks.remove(&bone);
-                    }
-                    current.keep_offsets(&world.avatar_lib.rig, &session.base);
+                    apply_animation(&world.avatar_lib.rig, session, animation, mode, true);
                 }
             }
             self.refresh = true;
         }
         self.clip.prepared.append(&mut self.poser.storage.prepared);
+    }
+    /// A pose sent live by the Pingmator link, on the user's own avatar.
+    /// Opens the poser when it is not posing; gives the pose back when the
+    /// poser has no session for the agent yet (it captures one next frame).
+    /// One undo step per burst of updates, not one per dragged frame.
+    pub fn apply_link_pose(&mut self, world: &World, animation: aurora_assets::Animation) -> Result<(), aurora_assets::Animation> {
+        if !self.poser.active {
+            self.open_poser();
+            return Err(animation);
+        }
+        let Some(session) = self.poser.sessions.get_mut(&world.agent_id) else {
+            return Err(animation);
+        };
+        let now = std::time::Instant::now();
+        let burst = self
+            .poser
+            .link_last
+            .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_secs(1));
+        self.poser.link_last = Some(now);
+        apply_animation(&world.avatar_lib.rig, session, animation, document::LoadMode::All, !burst);
+        self.refresh = true;
+        Ok(())
     }
     fn poser_transform(&mut self, rig: &Rig, frame: &Frame, position: Vec3, rotation: Quat, rotated: bool) {
         let Some(bone) = self.selected else { return };
@@ -746,4 +741,46 @@ impl Editor {
             }
         }
     }
+}
+/// A loaded or linked animation's first frame laid on a pose session: the
+/// joints it drives replace the captured ones.
+fn apply_animation(
+    rig: &Rig,
+    session: &mut data::Session,
+    animation: aurora_assets::Animation,
+    mode: document::LoadMode,
+    checkpoint: bool,
+) {
+    let mut pose = ik::LocalPose {
+        rotations: session.pose.rotations.clone(),
+        positions: session.pose.positions.clone(),
+    };
+    let sample = ik::animations::Sample {
+        animation: Arc::new(BoundAnim::bind(animation, rig)),
+        frame: 0,
+        time_seconds: None,
+    };
+    ik::animations::apply(rig, &mut pose, Vec3::ZERO, &[sample]);
+    let selective = matches!(mode, document::LoadMode::Selective | document::LoadMode::SelectiveRotations);
+    let rotations = matches!(mode, document::LoadMode::Rotations | document::LoadMode::SelectiveRotations);
+    let edited: Vec<_> = (0..rig.len()).map(|b| session.edited(b)).collect();
+    if checkpoint {
+        session.checkpoint();
+    }
+    let current = Arc::make_mut(&mut session.pose);
+    for (bone, edited) in edited.iter().enumerate() {
+        if selective && *edited {
+            continue;
+        }
+        // a joint the file drives is the file's, not the capture's
+        if current.rotations[bone].dot(pose.rotations[bone]).abs() < 0.9999999 {
+            current.origin[bone] = rig.local_rot[bone];
+        }
+        current.rotations[bone] = pose.rotations[bone];
+        if !rotations {
+            current.positions[bone] = pose.positions[bone];
+        }
+        current.locks.remove(&bone);
+    }
+    current.keep_offsets(rig, &session.base);
 }
