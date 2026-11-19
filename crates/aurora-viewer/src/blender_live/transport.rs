@@ -10,6 +10,9 @@ const MAGIC: &[u8; 8] = b"AURBLD2\n";
 /// The greeting of add-ons that send no secret: refused, with a reply that
 /// makes them say "Incompatible Aurora protocol" instead of retrying silently.
 const OLD_MAGIC: &[u8; 8] = b"AURBLD1\n";
+/// The greeting of a live-pose tool (Pingmator, a script): it does not send
+/// the secret, it proves it knows it (`pose.rs`), and may then send poses only.
+const POSE_MAGIC: &[u8; 8] = b"AURPOS1\n";
 
 pub(super) fn start(
     port: u16,
@@ -18,11 +21,18 @@ pub(super) fn start(
     rest_axes: std::collections::HashMap<String, [f32; 16]>,
     ctx: egui::Context,
     pool: Option<Arc<aurora_render::StagingPool>>,
+    skeleton: Option<aurora_assets::Skeleton>,
 ) -> io::Result<Arc<Shared>> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
-    start_listener(listener, secret, supported, rest_axes, ctx, pool)
+    // Live poses need the avatar skeleton to read a pose; without it the
+    // preview starts for meshes only.
+    let pose = skeleton
+        .and_then(|skeleton| super::pose::PoseLink::new(&secret, skeleton))
+        .map(Arc::new);
+    start_listener_with(listener, secret, supported, rest_axes, ctx, pool, pose)
 }
 
+#[cfg(test)]
 pub(super) fn start_listener(
     listener: TcpListener,
     secret: String,
@@ -31,6 +41,18 @@ pub(super) fn start_listener(
     ctx: egui::Context,
     pool: Option<Arc<aurora_render::StagingPool>>,
 ) -> io::Result<Arc<Shared>> {
+    start_listener_with(listener, secret, supported, rest_axes, ctx, pool, None)
+}
+
+pub(super) fn start_listener_with(
+    listener: TcpListener,
+    secret: String,
+    supported: HashSet<String>,
+    rest_axes: std::collections::HashMap<String, [f32; 16]>,
+    ctx: egui::Context,
+    pool: Option<Arc<aurora_render::StagingPool>>,
+    pose: Option<Arc<super::pose::PoseLink>>,
+) -> io::Result<Arc<Shared>> {
     listener.set_nonblocking(true)?;
     let shared = Arc::new(Shared::default());
     let worker = shared.clone();
@@ -38,7 +60,16 @@ pub(super) fn start_listener(
         while !worker.stop.load(Ordering::Acquire) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    if let Err(error) = serve(&mut stream, &secret, &worker, &supported, &rest_axes, &ctx, pool.as_deref())
+                    if let Err(error) = serve(
+                        &mut stream,
+                        &secret,
+                        &worker,
+                        &supported,
+                        &rest_axes,
+                        &ctx,
+                        pool.as_deref(),
+                        pose.as_deref(),
+                    )
                         && !worker.stop.load(Ordering::Acquire)
                         && !matches!(
                             error.kind(),
@@ -51,6 +82,7 @@ pub(super) fn start_listener(
                     worker.status.lock().shape_capable = false;
                     worker.status.lock().shape_apply_capable = false;
                     worker.status.lock().import_capable = false;
+                    worker.status.lock().pose_client = None;
                     worker.import_request.lock().take();
                     worker.import_expected.lock().take();
                     worker.shape.lock().take();
@@ -97,6 +129,7 @@ fn serve(
     rest_axes: &std::collections::HashMap<String, [f32; 16]>,
     ctx: &egui::Context,
     pool: Option<&aurora_render::StagingPool>,
+    pose: Option<&super::pose::PoseLink>,
 ) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_millis(150)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
@@ -109,6 +142,9 @@ fn serve(
             io::ErrorKind::InvalidData,
             aurora_i18n::tr!("blender-live-addon-outdated").to_string(),
         ));
+    }
+    if &magic == POSE_MAGIC {
+        return serve_pose(stream, shared, pose, ctx);
     }
     if &magic != MAGIC {
         return Err(io::ErrorKind::InvalidData.into());
@@ -207,6 +243,89 @@ fn serve(
             }
         };
         self::reply(stream, shared, reply)?;
+        ctx.request_repaint();
+    }
+    Ok(())
+}
+
+/// A live-pose connection (`pose.rs`): the tool proves it knows the session
+/// secret without sending it, the server proves the same back when asked
+/// (`auth-mutual`), and only pose messages are accepted, never meshes or
+/// controls. The secret is the preview's own (`token.rs`), so there is one key
+/// file.
+fn serve_pose(stream: &mut TcpStream, shared: &Shared, pose: Option<&super::pose::PoseLink>, ctx: &egui::Context) -> io::Result<()> {
+    let Some(pose) = pose else {
+        let _ = writeln!(stream, "{}", serde_json::json!({"ok": false, "error": "live poses are not available"}));
+        return Ok(());
+    };
+    let challenge = super::pose::random_bytes();
+    let hello = serde_json::json!({
+        "protocol": protocol::VERSION,
+        "features": ["auth", "auth-mutual", "pose-bvh", "pose"],
+        "challenge": super::pose::hex(&challenge),
+    });
+    writeln!(stream, "{hello}")?;
+    let mut authenticated = false;
+    while !shared.stop.load(Ordering::Acquire) {
+        let mut len = [0; 4];
+        read(stream, &mut len, shared, Duration::from_secs(10))?;
+        let len = u32::from_le_bytes(len) as usize;
+        if len == 0 {
+            reply(stream, shared, serde_json::json!({"ok": true}))?;
+            continue;
+        }
+        if len > super::pose::MAX_MESSAGE {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        let mut bytes = vec![0; len];
+        read(stream, &mut bytes, shared, Duration::from_secs(5))?;
+        let unauthorized = |stream: &mut TcpStream| -> io::Result<()> {
+            reply(stream, shared, serde_json::json!({"ok": false, "error": "unauthorized"}))?;
+            Err(io::ErrorKind::PermissionDenied.into())
+        };
+        match super::pose::parse(&bytes) {
+            None => {
+                reply(stream, shared, serde_json::json!({"ok": false, "error": "only pose messages are accepted here"}))?;
+                return Ok(());
+            }
+            Some(Ok(super::pose::Message::Auth { client, response, nonce })) => {
+                if !super::pose::verify(&pose.key, &challenge, &response) {
+                    let _ = unauthorized(stream);
+                    return Ok(());
+                }
+                authenticated = true;
+                shared.status.lock().pose_client = Some(client.unwrap_or_default());
+                shared.pose_notice.store(true, Ordering::Release);
+                // A client that sent a nonce checks us in turn: it only sends
+                // poses once this proof matches (`auth-mutual`).
+                let mut answer = serde_json::json!({"ok": true});
+                if let Some(proof) = nonce.and_then(|nonce| super::pose::server_proof(&pose.key, &nonce)) {
+                    answer["server_proof"] = proof.into();
+                }
+                reply(stream, shared, answer)?;
+            }
+            Some(Ok(_)) if !authenticated => {
+                let _ = unauthorized(stream);
+                return Ok(());
+            }
+            Some(Ok(super::pose::Message::Pose(bvh))) => match super::pose::decode(&bvh, &pose.skeleton) {
+                Ok(animation) => {
+                    *shared.pose.lock() = Some(animation);
+                    reply(stream, shared, serde_json::json!({"ok": true}))?;
+                }
+                Err(error) => reply(stream, shared, serde_json::json!({"ok": false, "error": error}))?,
+            },
+            Some(Ok(super::pose::Message::Quaternions { rotations, positions })) => {
+                match super::pose::quaternion_pose(&rotations, &positions, &pose.skeleton) {
+                    Ok(animation) => {
+                        *shared.pose.lock() = Some(animation);
+                        reply(stream, shared, serde_json::json!({"ok": true}))?;
+                    }
+                    Err(error) => reply(stream, shared, serde_json::json!({"ok": false, "error": error}))?,
+                }
+            }
+            Some(Err(error)) => reply(stream, shared, serde_json::json!({"ok": false, "error": error}))?,
+        }
         ctx.request_repaint();
     }
     Ok(())

@@ -1246,3 +1246,286 @@ fn blender_lods_transport_negotiates_ignores_stale_results_and_keeps_live_revisi
     assert_eq!(shared.status.lock().received, 2);
     drop(owner);
 }
+
+// Live poses over LiveMesh (pose.rs).
+
+/// A pose saved by Pingmator's own test: the left forearm turned on frame 5.
+const POSE_BVH: &str = include_str!("pose_test.bvh");
+
+fn pose_skeleton() -> aurora_assets::Skeleton {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/character/avatar_skeleton.xml");
+    aurora_assets::Skeleton::parse(&std::fs::read(path).expect("avatar_skeleton.xml")).expect("skeleton")
+}
+
+#[test]
+fn live_pose_hmac_matches_rfc_4231() {
+    // RFC 4231, test case 2
+    let mac = pose::hmac_sha256(b"Jefe", b"what do ya want for nothing?");
+    assert_eq!(pose::hex(&mac), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    // test case 6: a key longer than the block is hashed first
+    let mac = pose::hmac_sha256(&[0xaa; 131], b"Test Using Larger Than Block-Size Key - Hash Key First");
+    assert_eq!(pose::hex(&mac), "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54");
+    let key = [7; 32];
+    let challenge = [9; 32];
+    assert!(pose::verify(&key, &challenge, &pose::hex(&pose::hmac_sha256(&key, &challenge))));
+    assert!(!pose::verify(
+        &key,
+        &challenge,
+        &pose::hex(&pose::hmac_sha256(&[8; 32], &challenge))
+    ));
+    assert!(!pose::verify(&key, &challenge, "zz"));
+    assert!(!pose::verify(&key, &challenge, ""));
+}
+
+#[test]
+fn live_pose_messages_are_told_apart_from_meshes() {
+    assert_eq!(
+        pose::parse(br#"{"type":"auth","client":"Pingmator 0.3","response":"ab"}"#),
+        Some(Ok(pose::Message::Auth {
+            client: Some("Pingmator 0.3".into()),
+            response: "ab".into(),
+            nonce: None
+        }))
+    );
+    let nonce = "00".repeat(16);
+    assert_eq!(
+        pose::parse(format!(r#"{{"type":"auth","response":"ab","nonce":"{nonce}"}}"#).as_bytes()),
+        Some(Ok(pose::Message::Auth {
+            client: None,
+            response: "ab".into(),
+            nonce: Some(nonce)
+        }))
+    );
+    // a nonce that is too short, too long or not hex is refused, not ignored
+    for bad in ["", "00", "zz", &"00".repeat(15), &"00".repeat(65)] {
+        let message = format!(r#"{{"type":"auth","response":"ab","nonce":"{bad}"}}"#);
+        assert!(matches!(pose::parse(message.as_bytes()), Some(Err(_))), "nonce {bad:?}");
+    }
+    assert_eq!(
+        pose::parse(br#"{"type":"pose-bvh","bvh":"HIERARCHY"}"#),
+        Some(Ok(pose::Message::Pose("HIERARCHY".into())))
+    );
+    assert!(matches!(pose::parse(br#"{"type":"pose-bvh"}"#), Some(Err(_))));
+    assert!(matches!(pose::parse(br#"{"type":"auth"}"#), Some(Err(_))));
+    // controls, snapshots and garbage go on as before
+    assert_eq!(pose::parse(br#"{"type":"features","features":[]}"#), None);
+    assert_eq!(pose::parse(&serde_json::to_vec(&triangle()).expect("snapshot")), None);
+    assert_eq!(pose::parse(b"LODS{}"), None);
+    assert_eq!(pose::parse(b"not json"), None);
+    let long = format!(r#"{{"type":"auth","client":"{}","response":"ab"}}"#, "x\\u0007".repeat(100));
+    assert!(matches!(pose::parse(long.as_bytes()), Some(Ok(pose::Message::Auth { client: Some(name), .. })) if name == "x".repeat(64)));
+}
+
+#[test]
+fn live_pose_server_proof_answers_the_clients_nonce() {
+    let key = [7; 32];
+    let nonce = "ab".repeat(16);
+    let proof = pose::server_proof(&key, &nonce).expect("valid nonce");
+    // HMAC-SHA256(key, "aurora-hello:" + the nonce bytes), in hex
+    let mut message = b"aurora-hello:".to_vec();
+    message.extend_from_slice(&[0xab; 16]);
+    assert_eq!(proof, pose::hex(&pose::hmac_sha256(&key, &message)));
+    // another key, another nonce and the hello challenge's own answer all differ
+    assert_ne!(Some(proof.clone()), pose::server_proof(&[8; 32], &nonce));
+    assert_ne!(Some(proof.clone()), pose::server_proof(&key, &"cd".repeat(16)));
+    assert_ne!(proof, pose::hex(&pose::hmac_sha256(&key, &[0xab; 16])));
+    // lengths: 16 and 64 bytes are accepted, 15 and 65 and bad hex are not
+    assert!(pose::server_proof(&key, &"00".repeat(64)).is_some());
+    assert!(pose::server_proof(&key, &"00".repeat(15)).is_none());
+    assert!(pose::server_proof(&key, &"00".repeat(65)).is_none());
+    assert!(pose::server_proof(&key, "zz").is_none());
+}
+
+#[test]
+fn live_pose_key_is_the_session_secret() {
+    let link = pose::PoseLink::new(TEST_KEY, pose_skeleton()).expect("64 hex characters");
+    assert_eq!(link.key[0], 0x01);
+    assert_eq!(link.key[31], 0xef);
+    assert!(pose::PoseLink::new("0123", pose_skeleton()).is_none());
+    assert!(pose::PoseLink::new(&"zz".repeat(32), pose_skeleton()).is_none());
+}
+
+fn pose_exchange(stream: &mut TcpStream, reader: &mut BufReader<TcpStream>, bytes: &[u8]) -> Option<serde_json::Value> {
+    stream.write_all(&(bytes.len() as u32).to_le_bytes()).ok()?;
+    stream.write_all(bytes).ok()?;
+    let mut line = String::new();
+    reader.read_line(&mut line).ok().filter(|n| *n > 0)?;
+    serde_json::from_str(&line).ok()
+}
+
+fn pose_connect(port: u16) -> (TcpStream, BufReader<TcpStream>, serde_json::Value) {
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("connect");
+    stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+    stream.write_all(b"AURPOS1\n").expect("magic");
+    let mut reader = BufReader::new(stream.try_clone().expect("reader"));
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("hello");
+    let hello = serde_json::from_str(&line).expect("hello JSON");
+    (stream, reader, hello)
+}
+
+/// Whether the server closed the connection (a read gives end of file).
+fn pose_closed(reader: &mut BufReader<TcpStream>) -> bool {
+    let mut line = String::new();
+    matches!(reader.read_line(&mut line), Ok(0) | Err(_))
+}
+
+#[test]
+fn live_pose_needs_auth_and_keeps_meshes_working() {
+    let link = Arc::new(pose::PoseLink::new(TEST_KEY, pose_skeleton()).expect("key"));
+    let key = link.key;
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("port");
+    let port = listener.local_addr().expect("address").port();
+    let shared = transport::start_listener_with(
+        listener,
+        TEST_KEY.to_owned(),
+        supported(),
+        Default::default(),
+        egui::Context::default(),
+        None,
+        Some(link),
+    )
+    .expect("server");
+    let owner = Server {
+        shared: shared.clone(),
+        _token: None,
+    };
+    let pose = serde_json::to_vec(&serde_json::json!({"type":"pose-bvh","bvh":POSE_BVH})).expect("pose");
+
+    // a pose before auth closes the connection
+    let (mut stream, mut reader, hello) = pose_connect(port);
+    let features = hello["features"].as_array().expect("features");
+    assert!(features.iter().any(|f| f == "auth") && features.iter().any(|f| f == "pose-bvh") && features.iter().any(|f| f == "pose"));
+    let reply = pose_exchange(&mut stream, &mut reader, &pose).expect("reply");
+    assert_eq!(reply["error"], "unauthorized");
+    assert!(pose_closed(&mut reader));
+    assert!(shared.pose.lock().is_none());
+
+    // a wrong key closes the connection
+    let (mut stream, mut reader, hello) = pose_connect(port);
+    let challenge = hello["challenge"].as_str().expect("challenge").to_string();
+    let wrong = pose::hex(&pose::hmac_sha256(&[6; 32], challenge.as_bytes()));
+    let auth = serde_json::to_vec(&serde_json::json!({"type":"auth","client":"Test","response":wrong})).expect("auth");
+    assert_eq!(
+        pose_exchange(&mut stream, &mut reader, &auth).expect("reply")["error"],
+        "unauthorized"
+    );
+    assert!(pose_closed(&mut reader));
+
+    // the right key: poses arrive
+    let (mut stream, mut reader, hello) = pose_connect(port);
+    let challenge = hello["challenge"].as_str().expect("challenge");
+    let challenge: Vec<u8> = (0..challenge.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&challenge[i..i + 2], 16).expect("hex"))
+        .collect();
+    let response = pose::hex(&pose::hmac_sha256(&key, &challenge));
+    let nonce = "ab".repeat(16);
+    let auth = serde_json::to_vec(&serde_json::json!({"type":"auth","client":"Pingmator test","response":response,"nonce":nonce})).expect("auth");
+    let answer = pose_exchange(&mut stream, &mut reader, &auth).expect("reply");
+    assert_eq!(answer["ok"], true);
+    assert_eq!(answer["server_proof"], pose::server_proof(&key, &nonce).expect("proof"), "the server proves it holds the key too");
+    assert_eq!(shared.status.lock().pose_client.as_deref(), Some("Pingmator test"));
+    assert!(shared.pose_notice.load(Ordering::Acquire));
+    assert_eq!(pose_exchange(&mut stream, &mut reader, &pose).expect("reply")["ok"], true);
+    let animation = shared.pose.lock().take().expect("pose");
+    assert!(animation.joints.iter().any(|j| j.joint_name == "mElbowLeft"));
+    let bad = br#"{"type":"pose-bvh","bvh":"not a bvh"}"#;
+    assert_eq!(pose_exchange(&mut stream, &mut reader, bad).expect("reply")["ok"], false);
+    assert!(shared.pose.lock().is_none(), "a bad pose is not applied");
+    let quaternions = br#"{"type":"pose","rotations":{"mHead":[0.0,0.0,0.3826834,0.9238795]}}"#;
+    assert_eq!(pose_exchange(&mut stream, &mut reader, quaternions).expect("reply")["ok"], true);
+    assert!(
+        shared
+            .pose
+            .lock()
+            .take()
+            .expect("pose")
+            .joints
+            .iter()
+            .any(|j| j.joint_name == "mHead")
+    );
+    // a pose connection never takes a mesh: it is refused and closed
+    let snapshot = serde_json::to_vec(&triangle()).expect("snapshot");
+    assert_eq!(pose_exchange(&mut stream, &mut reader, &snapshot).expect("reply")["ok"], false);
+    assert!(pose_closed(&mut reader));
+    assert!(shared.latest.lock().is_none() && shared.pose.lock().is_none());
+    drop(owner);
+}
+
+#[test]
+fn live_pose_is_refused_without_the_skeleton() {
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("port");
+    let port = listener.local_addr().expect("address").port();
+    let shared = transport::start_listener(
+        listener,
+        TEST_KEY.to_owned(),
+        supported(),
+        Default::default(),
+        egui::Context::default(),
+        None,
+    )
+    .expect("server");
+    let owner = Server {
+        shared: shared.clone(),
+        _token: None,
+    };
+    let (_stream, mut reader, reply) = pose_connect(port);
+    assert_eq!(reply["ok"], false);
+    assert!(reply.get("challenge").is_none());
+    assert!(pose_closed(&mut reader));
+    assert!(shared.latest.lock().is_none() && shared.pose.lock().is_none());
+    drop(owner);
+}
+
+#[test]
+fn live_pose_quaternions_match_the_bvh_pose() {
+    let skeleton = pose_skeleton();
+    // Pingmator's test pose: lForeArm (channels Y, Z, X) turned by x 10, y 20, z 30.
+    let bvh = pose::decode(POSE_BVH, &skeleton).expect("BVH pose");
+    let from_bvh = bvh
+        .joints
+        .iter()
+        .find(|j| j.joint_name == "mElbowLeft")
+        .and_then(|j| j.rot_keys.first())
+        .expect("elbow")
+        .rotation;
+    // the client side: channels applied in their order, then BVH axes -> SL axes
+    let axis = |v: glam::Vec3, deg: f32| glam::Quat::from_axis_angle(v, deg.to_radians());
+    let q = axis(glam::Vec3::X, 10.0) * axis(glam::Vec3::Z, 30.0) * axis(glam::Vec3::Y, 20.0);
+    let sl = [q.z, q.x, q.y, q.w];
+    let message = serde_json::to_vec(&serde_json::json!({
+        "type": "pose",
+        "rotations": {"lForeArm": sl, "mHead": [0.0, 0.0, 0.0, 1.0], "notAJoint": [0.0, 0.0, 0.0, 1.0]},
+        "positions": {"hip": [0.0, 0.0, 0.1]},
+    }))
+    .expect("pose");
+    let Some(Ok(pose::Message::Quaternions { rotations, positions })) = pose::parse(&message) else {
+        panic!("pose message");
+    };
+    let animation = pose::quaternion_pose(&rotations, &positions, &skeleton).expect("pose");
+    let joint = |name: &str| animation.joints.iter().find(|j| j.joint_name == name);
+    let elbow = joint("mElbowLeft").expect("alias resolved").rot_keys[0].rotation;
+    assert!(elbow.angle_between(from_bvh) < 1e-4, "{elbow:?} vs {from_bvh:?}");
+    assert!(joint("mHead").is_some());
+    assert!(
+        animation.joints.iter().all(|j| j.joint_name != "notAJoint"),
+        "unknown names are skipped"
+    );
+    let pelvis = &joint("mPelvis").expect("pelvis").pos_keys[0];
+    assert!((pelvis.position - glam::Vec3::new(0.0, 0.0, 0.1)).length() < 1e-6);
+
+    let bad = |message: serde_json::Value| {
+        let bytes = serde_json::to_vec(&message).expect("json");
+        match pose::parse(&bytes) {
+            Some(Ok(pose::Message::Quaternions { rotations, positions })) => {
+                pose::quaternion_pose(&rotations, &positions, &skeleton).is_err()
+            }
+            Some(Err(_)) => true,
+            _ => false,
+        }
+    };
+    assert!(bad(serde_json::json!({"type":"pose"})));
+    assert!(bad(serde_json::json!({"type":"pose","rotations":{"mHead":[0.0,0.0,0.0,0.0]}})));
+    assert!(bad(serde_json::json!({"type":"pose","rotations":{"notAJoint":[0.0,0.0,0.0,1.0]}})));
+}
