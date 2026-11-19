@@ -1283,9 +1283,24 @@ fn live_pose_messages_are_told_apart_from_meshes() {
         pose::parse(br#"{"type":"auth","client":"Pingmator 0.3","response":"ab"}"#),
         Some(Ok(pose::Message::Auth {
             client: Some("Pingmator 0.3".into()),
-            response: "ab".into()
+            response: "ab".into(),
+            nonce: None
         }))
     );
+    let nonce = "00".repeat(16);
+    assert_eq!(
+        pose::parse(format!(r#"{{"type":"auth","response":"ab","nonce":"{nonce}"}}"#).as_bytes()),
+        Some(Ok(pose::Message::Auth {
+            client: None,
+            response: "ab".into(),
+            nonce: Some(nonce)
+        }))
+    );
+    // a nonce that is too short, too long or not hex is refused, not ignored
+    for bad in ["", "00", "zz", &"00".repeat(15), &"00".repeat(65)] {
+        let message = format!(r#"{{"type":"auth","response":"ab","nonce":"{bad}"}}"#);
+        assert!(matches!(pose::parse(message.as_bytes()), Some(Err(_))), "nonce {bad:?}");
+    }
     assert_eq!(
         pose::parse(br#"{"type":"pose-bvh","bvh":"HIERARCHY"}"#),
         Some(Ok(pose::Message::Pose("HIERARCHY".into())))
