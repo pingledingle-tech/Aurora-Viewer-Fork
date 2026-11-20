@@ -4,6 +4,8 @@ name: Windows test build
 # workflow artifact (7 days). Publishes nothing, creates no tag or release.
 on:
   workflow_dispatch:
+  push:
+    branches: [feat/livemesh-pose-test-20nov]
 
 permissions:
   contents: read
