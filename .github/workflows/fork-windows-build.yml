@@ -7,7 +7,7 @@ name: Fork Windows test build
 
 on:
   push:
-    branches: [feat/pingmator-link, feat/livemesh-pose, feat/livemesh-pose-on-main]
+    branches: [feat/pingmator-link, feat/livemesh-pose, feat/livemesh-pose-on-main, feat/livemesh-pose-on-0.9.12]
   workflow_dispatch:
 
 permissions:
