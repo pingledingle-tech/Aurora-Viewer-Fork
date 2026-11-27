@@ -59,9 +59,9 @@ English.
 | Textures stay grey or blurry | Point at a grey face, press L1 and Copy, then J3 | L1, J3, N3 | The face's state, the last warnings | texture state, memory pressure, failed downloads |
 | Stutters or low frame rate | Turn P3 on, reproduce for 30 s, press J5; a screenshot of P1 | P3, J5, P1 | The slow frames and their step | which step peaks (sync, upload, GPU) |
 | Disconnects or rubber-banding | Open N1, reproduce, press N2 then J3 | N1, N2, J3 | The region summary, the warnings | losses, last packet, simulator version |
+| The inventory stops loading (the count stops rising, "loading folders…" stays) | Wait a minute, press N4, then J3 | N4, J3 | The loader's state, the warnings | `reading` and `not read yet` folders, reads in flight and the oldest's age, last answer, retries |
 | Media or sound does not play | Turn M1 on, retry, press J3 | M1, J3 | The media lines and warnings | plugin and media state |
 | Any report, first message | Press J4 once | J4 | Version, hardware, settings | build, GPU vendor and driver, settings |
-| Scripted IK has no effect | Trigger the affected profile, press J8, then Copy | J8 | Local relay, definitions, accepted activations and target states | last_failure, complete_ack, active_packets, suppress_scripts, resolved/waiting links |
 | A worn animesh, or a rigged attachment that should move, is bent, stretched, misplaced or stays still | Stand within 3 m of the wearer, or choose My avatar when you wear it (or select the item), press J9, then Copy | J9, J2 | The worn animesh's skin joints, overrides, control skeleton and animations | joints `unknown to the skeleton`, an override that wins over the expected mesh, `rest` vs `now` on keyed joints, position keys far from the rest, animations `signalled, not playing` |
 | The viewer crashed | In the crash window, press Copy trace | — | The crash trace | top frames, panic message |
 
@@ -130,7 +130,6 @@ text in Send a diagnostic), **live** (a text kept up to date there),
 | J5 | Copy a tool's output | copy | What P3, P4, P5, P6, O9 and M1 wrote in the last 60 s |
 | J6 | Open the logs folder | window | The folder of `aurora.log` |
 | J7 | Script errors | window | The script debug window |
-| J8 | IK state | copy | Local IK reception, activation, editor suppression and target resolution; no scene selection required |
 | J9 | Worn animesh skeleton | copy | Each animated object the target wears (nearest avatar within 3 m, my avatar, or the wearer of the selection): the joints its meshes are skinned to, every joint position override they ask and which one wins, the control skeleton's skeleton-file / rest / current local positions of the overridden and animated joints, the animations playing (priority, joints keyed in position with their first and current values) and its place on its attachment point; then each ordinary worn attachment with rigged meshes (point, temporary or not; identical meshes written once with `and N more alike`), the joints its meshes are skinned to, the overrides all worn rigged meshes ask of the wearer's skeleton, and the animations playing on the wearer with the keyed joints that are attachment points or unknown |
 | J10 | Contacts tab state | copy | Where the Contacts tab of Conversations is (its first tab, or torn off in its own window, open or closed), whether Preferences shows it, whether the Contacts pane is the one shown, the window's appearance and column state, the tab chosen, the column's search, and how many friends (online), groups and contact sets there are |
 | L1 | Under the cursor | live | The prim last pointed at, every face; its button shows the face's pass and alpha |
@@ -154,13 +153,15 @@ text in Send a diagnostic), **live** (a text kept up to date there),
 | O2 | Detail levels (LOD) | toggle | The level of the objects near the pointer, with distance and radius |
 | O3 | Culling | toggle | Tested spheres, green drawn, red culled |
 | O4 | Freeze culling | toggle | Keeps the culling view to move around it |
-| O5 | Skeletons | toggle | Bones of the avatars within 32 m |
+| O5 | Skeletons | toggle | Bones of the avatars and animated objects within 32 m, each from its joint to its end, in green, like the Legacy Viewer's Render Metadata › Joints |
 | O6 | Complexity in name tags | toggle | |
 | O7 | Inspect objects | window | Inspect Objects on the target |
 | O8 | Avatar health | window | Stop animations, undeform, rebake, refresh attachments, reset skeleton |
 | O9 | Follow sculpts | toggle | Logs the attachment and sculpt-map changes of the target avatar (`sculpt watch:`) |
+| O10 | Avatar hitboxes | toggle | The avatars' hitboxes with Legacy Viewer parity, on the avatars within 32 m |
 | N1 | Network graph | window | Performance › Network |
 | N2 | Region summary | copy | Simulator version, time dilation, frame rates, counts, connected simulators, ping, losses |
+| N4 | Inventory loading | copy | Folders known, read, reading, failed, not read yet and over the server's limit; items, link originals unreadable and confirmed gone; the lost-items request's state; the background walk's reads in flight (and the oldest's age), queue, retries and their next time, the last answer, the freed unanswered reads, watchdog restarts and failed rounds. No names: for an inventory that stops loading |
 | P1 | Performance | window | The compact Performance window |
 | P2 | Resource monitor | window | Performance's full view |
 | P3 | Slow frames | toggle | `slow sync:` lines for the frames whose scene sync takes over 30 ms |
@@ -193,8 +194,8 @@ What a run does:
   when the avatar has none) with six copies of a Library object and one
   link. It never renames, moves, trashes or deletes anything, its own items
   included: a later run finds them again by name, place and owner.
-- **Worn objects**: its controller on Hind Right Foot, a second object on
-  Hind Left Foot, the forced-wear cases on Tail Tip. What the avatar wears
+- **Worn objects**: its controller on Right Hind Foot, a second object on
+  Left Hind Foot, the forced-wear cases on Tail Tip. What the avatar wears
   on these three points may be taken off; a case that would replace
   someone else's object on Tail Tip is skipped instead. Two of the objects
   get a small relay script (`world/bridge/selftest_relay.lsl`): it listens

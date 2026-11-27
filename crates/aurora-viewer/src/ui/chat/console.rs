@@ -110,19 +110,11 @@ pub(super) fn rows(ctx: &egui::Context, line: &ChatLine, job: BubbleJob) -> usiz
     ctx.fonts_mut(|f| crate::ui::bidi::layout(f, job.job, base).galley.rows.len())
 }
 
-/// The colour of a head's name: ours in the theme's teal, an object's in
-/// its kind's colour, a resident's in ink (the Conversations thread's).
-fn name_color(p: &Palette, line: &ChatLine, world: &World) -> Color32 {
-    if let Some(color) = crate::ui::colors::contact_sender_color(line, world) {
-        return color;
-    }
-    if is_object(line.kind) {
-        return crate::ui::colors::sender_color(line);
-    }
-    if line.kind.is_own() {
-        return p.teal;
-    }
-    p.ink
+/// The colour of a head's name: the senders' colour of Preferences ›
+/// Emitter (Avatars, ours included, or Objects), as in the Conversations
+/// thread (`thread::name_color`), unless a contact set colours it.
+fn name_color(line: &ChatLine, world: &World) -> Color32 {
+    crate::ui::colors::contact_sender_color(line, world).unwrap_or_else(|| crate::ui::colors::sender_color(line))
 }
 
 /// The recent nearby chat in cards (see the module).
@@ -130,6 +122,7 @@ fn name_color(p: &Palette, line: &ChatLine, world: &World) -> Color32 {
 pub(super) fn cards(
     ctx: &egui::Context,
     p: &Palette,
+    emoji: &mut crate::ui::emoji::Emoji,
     world: &World,
     pics: &HashMap<uuid::Uuid, egui::TextureHandle>,
     want_names: &mut HashSet<uuid::Uuid>,
@@ -206,13 +199,14 @@ pub(super) fn cards(
                         ui.multiply_opacity(card_alpha * crate::ui::colors::beyond_range_alpha(group[0]));
                         if small {
                             compact_card(
-                                ui, p, world, want_names, &group, seconds, now, card_alpha, times, &mut links, &mut names,
+                                ui, p, emoji, world, want_names, &group, seconds, now, card_alpha, times, &mut links, &mut names,
                             );
                             return;
                         }
                         card(
                             ui,
                             p,
+                            emoji,
                             world,
                             pics,
                             want_names,
@@ -251,6 +245,7 @@ pub(super) fn cards(
 fn card<'a>(
     ui: &mut egui::Ui,
     p: &Palette,
+    emoji: &mut crate::ui::emoji::Emoji,
     world: &World,
     pics: &HashMap<uuid::Uuid, egui::TextureHandle>,
     want_names: &mut HashSet<uuid::Uuid>,
@@ -274,6 +269,7 @@ fn card<'a>(
         body(
             ui,
             p,
+            emoji,
             world,
             want_names,
             first,
@@ -296,12 +292,13 @@ fn card<'a>(
             ui.spacing_mut().item_spacing.y = 1.0;
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                let font = egui::FontId::new(chat_size(ui.ctx(), 12.5), crate::ui::fonts::semibold(ui.ctx()));
+                let size = chat_size(ui.ctx(), 12.5);
+                let font = egui::FontId::new(size, crate::ui::fonts::semibold(ui.ctx()));
                 let galley = ui
                     .painter()
-                    .layout(first.from.clone(), font, name_color(p, first, world), text_w * 0.6);
+                    .layout(first.from.clone(), font, name_color(first, world), text_w * 0.6);
                 let (r, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
-                ui.painter().galley(r.min, galley, p.ink);
+                emoji.paint_galley(ui.painter(), r.min, galley, size, p.ink, 1.0);
                 names.push((r, first));
                 // a member of the Aurora team (objects never are)
                 let author = if first.kind.is_own() { world.agent_id } else { first.source };
@@ -319,7 +316,7 @@ fn card<'a>(
             });
             for &line in group {
                 let fade = alpha(seconds, line, now) / card_alpha.max(0.01);
-                body(ui, p, world, want_names, line, text_w, fade, links);
+                body(ui, p, emoji, world, want_names, line, text_w, fade, links);
             }
         });
     });
@@ -332,6 +329,7 @@ fn card<'a>(
 fn compact_card<'a>(
     ui: &mut egui::Ui,
     p: &Palette,
+    emoji: &mut crate::ui::emoji::Emoji,
     world: &World,
     want_names: &mut HashSet<uuid::Uuid>,
     group: &[&'a ChatLine],
@@ -380,7 +378,7 @@ fn compact_card<'a>(
         let mut painter = ui.painter().clone();
         painter.multiply_opacity(fade);
         let origin = (rect.min + egui::vec2(lead, 0.0)).round_to_pixels(painter.pixels_per_point());
-        painter.galley(origin, galley.clone(), p.ink);
+        emoji.paint_galley(&painter, origin, galley.clone(), size, p.ink, 1.0);
         let baseline = origin.y + crate::ui::widgets::galley_baseline(&painter, &galley);
         if let Some(time) = time {
             crate::ui::widgets::paint_on_baseline(&painter, time, rect.left(), baseline, p.muted_dim);
@@ -439,7 +437,7 @@ fn picture(
         thread::paint_icon(ui.painter(), glyph, rect.shrink(6.0), tint);
         return;
     }
-    let id = line.source;
+    let id = if line.anonymous() { uuid::Uuid::nil() } else { line.source };
     if !id.is_nil() {
         wanted_pics.insert(id);
     }
@@ -452,6 +450,7 @@ fn picture(
 fn body(
     ui: &mut egui::Ui,
     p: &Palette,
+    emoji: &mut crate::ui::emoji::Emoji,
     world: &World,
     want_names: &mut HashSet<uuid::Uuid>,
     line: &ChatLine,
@@ -473,7 +472,7 @@ fn body(
     let (rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
     let mut painter = ui.painter().clone();
     painter.multiply_opacity(fade);
-    painter.galley(rect.min, galley.clone(), p.ink);
+    emoji.paint_galley(&painter, rect.min, galley.clone(), size, p.ink, 1.0);
     let col = super::message_color(line, p, world).gamma_multiply(fade);
     line_extras(ui, p, world, &visual, rect.min, size, fade, badges, line_links, col, links);
 }
@@ -493,6 +492,8 @@ mod tests {
             origin: Origin::Live,
             blocked: false,
             beyond_range: false,
+            speaker: Default::default(),
+            private_history: false,
         }
     }
 
@@ -525,7 +526,8 @@ mod tests {
                     theme.apply(&ctx, 1.0);
                     crate::ui::fonts::set_chat_scale(&ctx, scale, 1.0);
                     let p = theme.palette();
-                    let draw = |limit| {
+                    let mut emoji = crate::ui::emoji::Emoji::load();
+                    let mut draw = |limit| {
                         let mut out = ctx.run_ui(
                             egui::RawInput {
                                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 1000.0))),
@@ -535,6 +537,7 @@ mod tests {
                                 super::super::toasts(
                                     ui.ctx(),
                                     &p,
+                                    &mut emoji,
                                     &world,
                                     &HashMap::new(),
                                     &mut HashSet::new(),
@@ -661,8 +664,9 @@ mod tests {
                 ctx.set_pixels_per_point(pixels);
                 let p = crate::theme::Theme::default().palette();
                 let _icons = crate::ui::icons::Icons::load(&ctx, None);
+                let mut emoji = crate::ui::emoji::Emoji::load();
                 // (an area shows from its second frame)
-                let run = || {
+                let mut run = || {
                     ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
@@ -672,6 +676,7 @@ mod tests {
                             cards(
                                 ui.ctx(),
                                 &p,
+                                &mut emoji,
                                 &world,
                                 &HashMap::new(),
                                 &mut HashSet::new(),
@@ -795,8 +800,9 @@ mod tests {
 
     /// Under RLVa's `@shownames` and `@showloc` the on-screen chat hides who
     /// speaks and shows what they typed as typed; what an object says is
-    /// rewritten (`ChatKind::text_in`; LLFloaterIMNearbyChatHandler::
-    /// processChat filters only when the source is not an avatar).
+    /// rewritten (LLFloaterIMNearbyChatHandler::processChat filters only
+    /// when the source is not an avatar). Both are decided when the line
+    /// arrives (`World::rlva_freeze_line`), and drawn as they were kept.
     #[test]
     fn rlva_keeps_what_a_resident_typed_and_rewrites_what_an_object_says() {
         let ctx = egui::Context::default();
@@ -825,18 +831,27 @@ mod tests {
         }));
         world.refresh_rlva_privacy();
         let text = "Near Tester waits in Secret Region";
-        let job = |kind: ChatKind, source: uuid::Uuid, from: &str| {
-            let mut l = line(kind, from, 0);
-            l.source = source;
-            l.text = text.into();
-            line_job(&ctx, &l, &p, &world, &mut HashSet::new(), 800.0, TEXT, false, JobLook::Line)
+        let mut job = |source_type, source_id: uuid::Uuid, from: &str| {
+            world.apply(aurora_net::NetEvent::Chat(aurora_net::ChatMessage {
+                from_name: from.into(),
+                source_id,
+                owner_id: me,
+                source_type,
+                chat_type: ChatType::Normal,
+                region: None,
+                position: glam::Vec3::ZERO,
+                message: text.into(),
+            }));
+            let l = world.chat.back().expect("the line");
+            assert_eq!(l.source, source_id);
+            line_job(&ctx, l, &p, &world, &mut HashSet::new(), 800.0, TEXT, false, JobLook::Line)
                 .job
                 .text
         };
-        let said = job(ChatKind::Local(ChatType::Normal), near, "Near Tester");
+        let said = job(aurora_net::ChatSourceType::Agent, near, "Near Tester");
         assert!(said.ends_with(text), "the text as typed: {said}");
         assert!(!said[..said.len() - text.len()].contains("Tester"), "the speaker hidden: {said}");
-        let object = job(ChatKind::Object(ChatType::Normal), uuid::Uuid::from_u128(0xB0C5), "Box");
+        let object = job(aurora_net::ChatSourceType::Object, uuid::Uuid::from_u128(0xB0C5), "Box");
         assert!(!object.contains("Tester") && !object.contains("Secret Region"), "{object}");
     }
 
@@ -856,7 +871,8 @@ mod tests {
         crate::theme::Theme::default().apply(&ctx, 1.0);
         let p = crate::theme::Theme::default().palette();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1536.0, 864.0));
-        let frame = |events: Vec<egui::Event>| {
+        let mut emoji = crate::ui::emoji::Emoji::load();
+        let mut frame = |events: Vec<egui::Event>| {
             let mut out = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(screen),
@@ -867,6 +883,7 @@ mod tests {
                     cards(
                         ui.ctx(),
                         &p,
+                        &mut emoji,
                         &world,
                         &HashMap::new(),
                         &mut HashSet::new(),

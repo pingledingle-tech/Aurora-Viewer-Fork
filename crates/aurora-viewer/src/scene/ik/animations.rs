@@ -76,7 +76,8 @@ pub fn apply(rig: &Rig, pose: &mut LocalPose, pelvis: Vec3, samples: &[Sample]) 
             pose.rotations[bone] = q;
         }
         if let Some((_, p)) = positions[bone] {
-            pose.positions[bone] = if bone == rig.pelvis { rig.local_pos[bone] + p - pelvis } else { p };
+            let local = rig.key_origin(bone) + p;
+            pose.positions[bone] = if bone == rig.pelvis { local - pelvis } else { local };
         }
     }
 }
@@ -238,7 +239,6 @@ mod tests {
         let target = Vec3::new(0.2, 0.1, 1.6);
         let rotation = Quat::from_rotation_x(0.7);
         pose.edit.goals.push(Goal {
-            follow: None,
             bone: head,
             root: head,
             position: target,

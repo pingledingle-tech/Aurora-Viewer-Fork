@@ -65,6 +65,8 @@ mod tests {
             origin: Origin::Live,
             blocked: false,
             beyond_range: false,
+            speaker: Default::default(),
+            private_history: false,
         };
         assert_eq!(alpha(&line), 1.0);
         line.blocked = true;

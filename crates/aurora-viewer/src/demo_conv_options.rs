@@ -103,6 +103,10 @@ fn line(time: SystemTime, from: &str, source: Uuid, kind: ChatKind, origin: Orig
         origin,
         blocked: false,
         beyond_range: false,
+        speaker: Default::default(),
+        // its history lines are Nova's conversation's, as
+        // `World::history_lines` loads a private conversation's
+        private_history: origin == Origin::Log,
     }
 }
 

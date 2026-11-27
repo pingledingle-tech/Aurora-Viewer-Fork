@@ -9,18 +9,40 @@ use super::super::{Folder, FolderChoice};
 use crate::language_file::{Failure, Shown};
 use egui::{RichText, Vec2};
 
+fn language_choices() -> &'static [(&'static str, String)] {
+    static CHOICES: std::sync::OnceLock<Vec<(&'static str, String)>> = std::sync::OnceLock::new();
+    CHOICES.get_or_init(|| {
+        let mut languages: Vec<_> = aurora_i18n::available_languages().collect();
+        aurora_i18n::language_menu_order(&mut languages, aurora_i18n::system_language());
+        languages
+            .into_iter()
+            .map(|(code, name)| {
+                let label = match code {
+                    "en" | "en-GB" | "en-AU" => name.to_owned(),
+                    _ => format!("{name} ({code})"),
+                };
+                (code, label)
+            })
+            .collect()
+    })
+}
+
 pub fn page(cx: &mut Cx) {
     use aurora_i18n::tr;
     cx.group(tr!("language-choice"), |cx| {
-        let languages: Vec<&str> = aurora_i18n::available_languages().map(|(_, name)| name).collect();
+        let choices = language_choices();
+        let languages: Vec<_> = choices.iter().map(|(_, label)| label.as_str()).collect();
         cx.keywords(&languages.join(" "))
             .row(tr!("language-choice"), tr!("language-help"), &field!(language), |ui, s| {
-                let selected = if s.language == "default" {
+                let selected = if s.language == "default" || s.language.is_empty() {
                     tr!("language-system")
                 } else {
-                    aurora_i18n::available_languages()
-                        .find(|&(code, _)| code == s.language)
-                        .map_or_else(|| aurora_i18n::text_in("en", "language-name"), |(_, name)| name)
+                    let codes: Vec<_> = choices.iter().map(|(code, _)| *code).collect();
+                    let code = aurora_i18n::resolve_language(&s.language, "", &codes);
+                    choices
+                        .iter()
+                        .find(|(key, _)| *key == code)
+                        .map_or_else(|| aurora_i18n::text_in("en", "language-name"), |(_, label)| label.as_str())
                 };
                 let mut changed = false;
                 // greyed while the language file is used instead
@@ -32,8 +54,8 @@ pub fn page(cx: &mut Cx) {
                             changed |= ui
                                 .selectable_value(&mut s.language, "default".to_owned(), tr!("language-system"))
                                 .changed();
-                            for (code, name) in aurora_i18n::available_languages() {
-                                changed |= ui.selectable_value(&mut s.language, code.to_owned(), name).changed();
+                            for (code, label) in choices {
+                                changed |= ui.selectable_value(&mut s.language, (*code).to_owned(), label).changed();
                             }
                         })
                 })
@@ -140,7 +162,7 @@ pub fn page(cx: &mut Cx) {
     // settings, so outside the page's reset
     let p = cx.p;
     cx.group(tr!("ui-options-backup"), |cx| {
-        use crate::ui::widgets::{ActionKind, action_button};
+        use crate::ui::widgets::{ActionKind, action_button, action_button_if};
         let size = Vec2::new(0.0, 26.0);
         cx.row_with(
             tr!("ui-options-backup-save"),
@@ -187,6 +209,36 @@ pub fn page(cx: &mut Cx) {
                     }
                     if !st.restore_status.is_empty() {
                         ui.add(egui::Label::new(RichText::new(&st.restore_status).size(11.5).color(p.muted)).wrap());
+                    }
+                });
+                false
+            },
+        );
+        cx.row_with(
+            tr!("ui-options-legacy-lists"),
+            tr!("ui-options-legacy-lists-help"),
+            &Nothing,
+            |ui, _, st, r| {
+                ui.vertical(|ui| {
+                    let ready = st.legacy_lists_ready;
+                    if action_button_if(
+                        ui,
+                        &p,
+                        "file-import",
+                        tr!("ui-options-legacy-lists-button"),
+                        ActionKind::Flat,
+                        size,
+                        ready,
+                    )
+                    .clicked()
+                    {
+                        r.find_legacy_lists = true;
+                    }
+                    if !ready {
+                        ui.label(RichText::new(tr!("ui-options-legacy-lists-no-account")).size(11.5).color(p.muted));
+                    }
+                    if !st.legacy_lists_status.is_empty() {
+                        ui.add(egui::Label::new(RichText::new(&st.legacy_lists_status).size(11.5).color(p.muted)).wrap());
                     }
                 });
                 false

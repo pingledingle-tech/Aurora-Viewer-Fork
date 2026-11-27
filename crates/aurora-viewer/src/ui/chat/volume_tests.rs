@@ -45,6 +45,8 @@ fn volume_emphasis_reaches_conversations_toasts_links_emoji_and_search() {
                         origin: Origin::Live,
                         blocked: false,
                         beyond_range: false,
+                        speaker: Default::default(),
+                        private_history: false,
                     };
                     world.chat.clear();
                     world.chat.push_back(line.clone());
@@ -53,6 +55,7 @@ fn volume_emphasis_reaches_conversations_toasts_links_emoji_and_search() {
                             toasts(
                                 ui.ctx(),
                                 &p,
+                                &mut emoji,
                                 &world,
                                 &pics,
                                 &mut names,
@@ -161,6 +164,8 @@ fn object_volume_changes_start_a_new_console_card() {
         origin: Origin::Live,
         blocked: false,
         beyond_range: false,
+        speaker: Default::default(),
+        private_history: false,
     };
     let lines = [line(ChatType::Normal), line(ChatType::Whisper), line(ChatType::Shout)];
     assert_eq!(console::groups(&lines.iter().collect::<Vec<_>>()).len(), 3);

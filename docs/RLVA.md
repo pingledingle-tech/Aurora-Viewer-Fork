@@ -4,11 +4,18 @@ The `rlva` task implements the Legacy Viewer's RLVa 2.4.2 command families,
 targeting RLV protocol 3.4.3, referenced by issue #687. Human grid validation
 is pending. Preferences > RLVa > Enable RLVa is
 off by default, including settings written before the option existed.
-Disabling it releases all session restrictions and discards queued commands.
+RLVa starts when a login starts with it on, and once it runs it never stops
+before the viewer quits, as in the Legacy Viewer (RlvHandler::setEnabled at
+STATE_LOGIN_CLEANUP, RlvSettings::onChangedSettingMain;
+`world/rlva/switch.rs`, #1866): turning it off shows "RLVa will be disabled
+after you restart" and the restrictions stay for the whole session. On the
+login screen, before RLVa has started, the switch applies at once both ways;
+turning it on during a session waits for the next login. Starting with it
+off releases all restrictions and discards queued commands.
 The preference persists; object locks never do. The native next-login flag
 persists separately by avatar UUID after tploc or a locked sitting session,
 forcing the last position while RLVa remains enabled. It initially defaults
-to the last position, as in the reference. Disabling clears that flag too.
+to the last position, as in the reference. A start with RLVa off ignores it.
 Its ordered, coalesced writes run off the frame thread and flush at shutdown;
 offline demos never read or write this catalogue.
 
@@ -17,6 +24,13 @@ Reference: `RlvCommand`, `RlvHandler`, `RlvActions`, `RlvInventory`,
 Legacy Viewer (originally LGPL 2.1, Kitty Barnett). The upstream
 [command documentation](https://docs.catznip.com/rlva/allinone/) is useful for
 script authors; the command lists below describe this branch specifically.
+
+The rule is the Legacy Viewer's behaviour, neither stricter nor looser, with
+two exceptions: a control the Legacy Viewer does not have follows the
+restriction of its nearest neighbour, and an asset id is never shown where
+the creators' permission rule hides it. (RLVa could be turned off during a
+session until #1866; it now waits for the next start, as in the Legacy
+Viewer.)
 
 ## Current command families
 
@@ -197,6 +211,14 @@ script authors; the command lists below describe this branch specifically.
   reference's defaults; releasing the last FOV limit restores the user's value.
   Active FOV commands use the reference's physical bounds adjusted for window
   aspect; enabling RLVa without camera commands preserves the native view.
+  The distance limits hold the third-person and follow views only, never
+  mouselook nor the joystick flycam, which the FOV limits do not reach
+  either (LLAgentCamera::calcCameraPositionTargetGlobal,
+  LLViewerJoystick::moveFlycam). The avatar's limits are measured from its
+  head, the origin's from the place the avatar's own view gives the camera,
+  and one of the two holds the camera at a time: the avatar's when its two
+  ends are equal (`camdistmax:0` alone is such a lock), else the origin's
+  when there is one. Nothing forces mouselook.
 - Vision: per-object setsphere blend, fixed/variable blur, chromatic
   aberration and pixelation; avatar/camera origins, distance/value extension
   and tweened local modifiers. At most six sphere effects run in order on
@@ -214,7 +236,13 @@ script authors; the command lists below describe this branch specifically.
   HUD visibility. setcam_avdist/camavdist silhouettes use the reference's
   dark colour and take precedence over render exceptions.
 - Display: showinv, showminimap, showworldmap, shownametags and
-  showhovertext/all/hud/world.
+  showhovertext/all/hud/world. In Appearance, showinv disables the "My
+  Outfits" list alone, and leaves it and the outfit editor once, when it
+  starts (RlvBehaviourToggleHandler<RLV_BHVR_SHOWINV>); the outfit gallery
+  stays, without the list of an outfit's items Aurora adds to it. Pay stays
+  enabled in a profile under pay: the pay window refuses to open. Back and
+  Forward toward a place showloc hid stay enabled, and ask for the zeroed
+  place the history keeps (LLTeleportHistory::goToItem).
 - Privacy: showloc, shownames (including strict UUID exceptions) and
   shownearby. Display names, rich chat, notifications, hover text, maps and
   radar use privacy projections while canonical identities and transcript
@@ -256,7 +284,22 @@ script authors; the command lists below describe this branch specifically.
   question, its link prompt) is shown as the simulator sent it, the name of
   the object's owner included (process_script_dialog and
   process_script_question have no RLVa test); a click on that name opens no
-  profile while the restriction hides the resident. Application links and place details filter labels and
+  profile while the restriction hides the resident. The giver of an
+  inventory offer, and who accepts or declines what we gave, is hidden only
+  while they stand around with neither a conversation nor their profile
+  open (inventory_offer_handler, RlvUIEnabler::hasOpenIM and
+  hasOpenProfile); it is decided once, when the notice arrives, and its
+  card, the notification history and the on-screen chat follow. A payment
+  names its resident. A hidden resident's radar mark stays on the name tag
+  and leaves the map dot (LLVOAvatar::getNameTagColor, LLNetMap::draw). The
+  build General tab, the object profile and Inspect hide the owner, and the
+  creator only when they also own the object or stand around
+  (LLPanelPermissions::refresh). The label of an application link found
+  from an id (a resident, a group, a parcel, an experience) is shown as
+  found; what a label takes from its address is rewritten like the text
+  around it. A line read back from a transcript keeps the name and the
+  text the file gives it (FSFloaterNearbyChat::loadHistory): what was
+  hidden when it was said is hidden in the file. Place details
   disallow copying a hidden location. New landmarks, picks and classifieds
   cannot reveal the current location; existing entries remain editable.
   Teleport offers retain only eligible recipients (permissive tplure
@@ -498,7 +541,9 @@ The `sitting` FR capture and its native demo log confirm one object sit,
 one stand and then `ground_sit=true, object_seated=false`. Fixture actions
 are delivered once per rendered frame, even when native updates repeat.
 
-`AURORA_DEMO_RLVA=enabled|disabled|released` opens the native preference page
-and delivers synthetic object commands through `World::apply`. Capture after
-frame 800. The three modes show active locks, ignored commands and locks
-released by the global switch. These fixtures do not establish grid parity.
+`AURORA_DEMO_RLVA=enabled|disabled|released|restart` opens the native
+preference page and delivers synthetic object commands through `World::apply`.
+Capture after frame 800. The modes show active locks, ignored commands, locks
+released at the next start with RLVa off (the demo stops it in place), and
+the switch turned off in the session with its restart alert and the locks
+kept. These fixtures do not establish grid parity.

@@ -46,6 +46,7 @@ mod director_montage;
 mod director_render;
 mod director_thumbs;
 mod director_titles;
+mod disable_glass;
 mod disk_io;
 mod dof;
 mod editor_sync;
@@ -94,9 +95,12 @@ mod movement;
 mod natural_order;
 mod net_adapters;
 mod net_profile;
+mod object_stage;
 mod oiia;
 mod omnifilter;
+mod open_files;
 mod open_path;
+mod outside;
 mod overlay_hooks;
 mod own_motion;
 mod physics_editor;
@@ -208,12 +212,17 @@ fn main() -> anyhow::Result<()> {
     aurora_i18n::select("default", cli::get().language.as_deref());
     crash::start();
     logging::init();
+    // #2970: a desktop's 1024 open files run out in a busy region
+    open_files::raise();
     // Preferences › Network › Proxy: before the first connection of the
     // viewer (LLStartUp::startLLProxy, at startup)
     proxy::install(&settings::Settings::load().proxy);
     // the interface language file, read with the settings before the log
     language_file::report();
     splash::settings();
+    // started by an update: its helper waits while the start moves on
+    splash::report_to_update();
+    splash::test_slow_start();
     // The loader scans the layer manifests (and may call their pre-instance
     // hooks): on a thread of its own, like the crash report's list of layers
     // (crash/mod.rs), so the window never waits for this log line
@@ -377,6 +386,7 @@ fn run_viewer() -> anyhow::Result<()> {
     // the browsers stop with the app; their private profiles are removed
     // while the plugins let go of their files
     let restart_vr = app.requested_vr_restart();
+    app.leak_session_at_exit();
     drop(app);
     media::private_profile::finish(std::time::Duration::from_secs(8));
     world::tphistory::finish_writes();
