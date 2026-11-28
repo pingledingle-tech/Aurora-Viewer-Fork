@@ -14992,6 +14992,8 @@ build-material-saved = Material "{ $name }" saved to your inventory.
 build-material-save-failed = The material could not be saved to your inventory.
 
 blender-live-title = LiveMesh
+blender-live-pose-connected = { $client } connected to LiveMesh. Its poses show on your avatar, visible to you only.
+blender-live-pose-unknown-client = A pose tool
 blender-live-invalid-source = Invalid or duplicate live object identifier.
 blender-live-connection = Connection
 blender-live-objects = Objects

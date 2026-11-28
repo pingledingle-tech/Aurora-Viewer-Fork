@@ -10,6 +10,7 @@ pub(crate) mod import;
 mod installer;
 mod links;
 pub mod objects;
+mod pose;
 pub mod protocol;
 pub(crate) mod shape;
 pub(crate) mod staging;
@@ -65,6 +66,8 @@ pub struct Status {
     pub import_capable: bool,
     pub received: u64,
     pub error: Option<String>,
+    /// The tool sending live poses, once it has passed `auth` (pose.rs).
+    pub pose_client: Option<String>,
 }
 
 #[derive(Default)]
@@ -81,6 +84,10 @@ pub(crate) struct Shared {
     pub import_request: Mutex<Option<import::Request>>,
     pub import_expected: Mutex<Option<import::Request>>,
     pub import_result: Mutex<Option<(Uuid, Result<import::Bundle, String>)>>,
+    /// The newest live pose decoded on the socket thread (pose.rs).
+    pub pose: Mutex<Option<aurora_assets::Animation>>,
+    /// Set when a pose tool authenticates; taken by the frame for the notice.
+    pub pose_notice: AtomicBool,
 }
 
 struct Server {
@@ -136,6 +143,8 @@ pub struct Live {
     pub next_local_id: u32,
     pub attach_choices: Vec<(u8, bool, String)>,
     pub placement_dirty: HashSet<Uuid>,
+    /// A live pose waiting for the poser to have a session for the agent.
+    pub pose_pending: Option<aurora_assets::Animation>,
     /// The Avatar tab's elbow and knee bend, while the preview runs.
     pub bend: crate::scene::anim::PreviewBend,
     /// The Avatar tab's Fit lab (`fit_lab.rs`).
@@ -204,6 +213,7 @@ impl Default for Live {
             next_local_id: 1,
             attach_choices: Vec::new(),
             placement_dirty: HashSet::new(),
+            pose_pending: None,
             bend: Default::default(),
             fit: Default::default(),
             changed: HashMap::new(),
@@ -439,17 +449,28 @@ impl Live {
         rest_axes: std::collections::HashMap<String, [f32; 16]>,
         ctx: &egui::Context,
         pool: Arc<aurora_render::StagingPool>,
+        skeleton: Option<aurora_assets::Skeleton>,
     ) {
         if self.running() {
             return;
         }
         // The secret is written before the port opens, so the add-on never
-        // meets a listening preview with a stale file.
+        // meets a listening preview with a stale file. Live poses use the
+        // same secret as the key of their handshake (pose.rs), so there is
+        // one key file, not two.
         let token = token::folder()
             .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
             .and_then(|folder| token::File::write(&folder, self.port));
         let started = token.and_then(|token| {
-            let (shared, thread) = transport::start(self.port, token.secret().to_owned(), supported, rest_axes, ctx.clone(), Some(pool))?;
+            let (shared, thread) = transport::start(
+                self.port,
+                token.secret().to_owned(),
+                supported,
+                rest_axes,
+                ctx.clone(),
+                Some(pool),
+                skeleton,
+            )?;
             Ok(Server {
                 shared,
                 thread: Some(thread),
@@ -465,6 +486,26 @@ impl Live {
         }
     }
 
+    /// The newest live pose, or the one the poser could not take yet.
+    pub fn take_pose(&mut self) -> Option<aurora_assets::Animation> {
+        let latest = self.server.as_ref().and_then(|server| server.shared.pose.lock().take());
+        latest.or_else(|| self.pose_pending.take())
+    }
+
+    /// Keeps a pose for the next frame (the poser had no session yet).
+    pub fn keep_pose(&mut self, animation: aurora_assets::Animation) {
+        self.pose_pending = Some(animation);
+    }
+
+    /// The name of a pose tool that has just authenticated, once.
+    pub fn take_pose_client(&self) -> Option<String> {
+        let shared = &self.server.as_ref()?.shared;
+        if !shared.pose_notice.swap(false, Ordering::AcqRel) {
+            return None;
+        }
+        shared.status.lock().pose_client.clone()
+    }
+
     pub fn stop(&mut self) {
         self.import = Default::default();
         self.received_at = None;
@@ -475,6 +516,7 @@ impl Live {
         self.undo_requested = false;
         self.start_requested = false;
         self.stop_server();
+        self.pose_pending = None;
         self.clear = true;
     }
 

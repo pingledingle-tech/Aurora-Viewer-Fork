@@ -14815,6 +14815,8 @@ build-material-saved = マテリアル「{ $name }」をインベントリに保
 build-material-save-failed = マテリアルをインベントリに保存できませんでした。
 
 blender-live-title = LiveMesh
+blender-live-pose-connected = { $client } が LiveMesh に接続しました。ポーズはあなたのアバターに表示され、あなたにだけ見えます。
+blender-live-pose-unknown-client = ポーズツール
 blender-live-invalid-source = ライブオブジェクトの識別子が無効か、重複しています。
 blender-live-connection = 接続
 blender-live-objects = オブジェクト

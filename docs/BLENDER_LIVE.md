@@ -1114,3 +1114,52 @@ Missing material/image fields preserve the original v1 color-only behavior.
 Blender API references: [evaluated dependency graph](https://docs.blender.org/api/4.3/bpy.types.Depsgraph.html),
 [object mesh capture](https://docs.blender.org/api/4.3/bpy.types.Object.html#bpy.types.Object.to_mesh),
 [mesh corner normals and triangulation](https://docs.blender.org/api/4.3/bpy.types.Mesh.html).
+
+## Live poses
+
+LiveMesh also takes live poses from local tools such as the PinglyMotion
+animation editor. The pose shows on your own avatar through the local Poser,
+visible to you only; nothing is sent to the region. When the Poser has no
+session yet, the pose waits for the next frame. The chat says which tool is
+connected. The Blender add-on is not affected: it keeps its own greeting and never sees pose messages.
+
+A pose tool opens its own kind of session: it sends the greeting `AURPOS1\n`
+instead of the add-on's `AURBLD2\n`, and never sends the secret. The key is the
+session secret the preview already writes to `blender-live/<port>.token`
+(see above; the 64 hex characters after the first line are 32 bytes), so
+there is one key file for the add-on and for pose tools. The `hello` of a pose
+session lists `auth`, `auth-mutual`, `pose-bvh` and `pose`, and carries
+`challenge`, 32 random bytes in hex. The token file is removed when LiveMesh
+stops.
+
+A pose session takes pose messages only: a mesh, a control or anything else is
+answered with an error and the connection is closed, so a pose tool can never
+change the preview's meshes. Pose messages use the normal four-byte framing.
+Each gets one JSON line back: `{"ok":true}` or `{"ok":false,"error":"..."}`.
+
+- `{"type":"auth","client":"<name> <version>","response":"<hex>","nonce":"<hex>"}`:
+  `response` is HMAC-SHA256 of the challenge bytes with the key. The key
+  itself never crosses the socket. `nonce` is optional (16 to 64 random bytes
+  in hex, `auth-mutual`): the answer then carries `server_proof`, the hex
+  HMAC-SHA256 of `"aurora-hello:"` followed by the nonce bytes under the same
+  key, so the client can tell that the program on the port can read the token
+  file, as Aurora does, before it sends any pose. A wrong answer gets
+  `"error":"unauthorized"` and the connection is closed. The client name is
+  cut to 64 characters, control characters removed.
+- `{"type":"pose-bvh","bvh":"<BVH text>"}`: only after a successful `auth`
+  (otherwise `unauthorized` and close). The BVH is read like a Poser pose file
+  (`parse_bvh_pose`, its first frame after the neutral one); PinglyMotion sends a
+  neutral frame, then the pose twice. A pose message is at most 1 MiB.
+- `{"type":"pose","rotations":{"<joint>":[x,y,z,w],…},"positions":{"<joint>":[x,y,z]}}`:
+  also only after `auth`. Local rotations as quaternions (x, y, z, w) in the
+  SL avatar frame (X forward, Y left, Z up), relative to the rest pose, as an
+  `.anim` stores them; positions are offsets in metres (clamped to ±5 m),
+  usually only the pelvis. Joint names are SL names; the skeleton's aliases
+  (`hip`, `lForeArm`…) are accepted, unknown names are skipped, at most 256
+  joints. Joints the message does not name keep the Poser's pose. A BVH
+  rotation maps to it by applying the channels in their order (each new axis
+  multiplied in front), then turning BVH axes into SL axes: vector part
+  (x, y, z) becomes (z, x, y).
+
+A viewer started without the skeleton, or one that cannot write the token
+file, offers meshes only and answers a pose session with an error.
